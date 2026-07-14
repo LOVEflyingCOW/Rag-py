@@ -1,0 +1,27 @@
+# Python 缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+# 虚拟环境
+env/
+venv/
+venv/
+# 构建和分发
+build/
+dist/
+*.egg-info/
+eggs/
+# 日志文件
+*.log
+# 单元测试和覆盖率报告
+tox/
+nox/
+coverage
+pytest_cache/
+# Jupyter Notebook 检查点
+ipynb_checkpoints/
+# IDE 配置文件
+idea/
+vscode/
+# 本地环境变量文件
+env
