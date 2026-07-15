@@ -1,0 +1,9 @@
+LLM Security Best Practices
+
+1. Data Privacy: Uploaded documents may contain sensitive information. Always sanitize and de-identify data before uploading.
+
+2. Hallucination Mitigation: LLMs can produce plausible but incorrect content. RAG reduces this risk by grounding answers in retrieved context.
+
+3. Access Control: Different users should have different permissions on each knowledge base. Use bearer tokens to authenticate API calls.
+
+4. Content Safety: Filter inappropriate output and follow applicable content safety regulations.
