@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     EMBEDDING_API_KEY: str = ""
     EMBEDDING_API_URL: str = ""
     EMBEDDING_MODEL: str = "bge-m3"
+    EMBEDDING_BATCH_SIZE: int = 16
+    EMBEDDING_TIMEOUT: int = 60
+    EMBEDDING_CACHE_SIZE: int = 1000
+    EMBEDDING_MAX_RETRIES: int = 3
+    EMBEDDING_DEFAULT_DIM: int = 384
 
     UPLOAD_DIR: str = "./data/uploads"
     VECTOR_STORE_DIR: str = "./data/vector_stores"
@@ -43,6 +48,13 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def embedding_provider_name(self) -> str:
+        """根据配置自动推断 Provider 名称"""
+        if self.EMBEDDING_API_URL:
+            return "remote"
+        return "mock"
 
     def ensure_dirs(self) -> None:
         """确保所有必要目录存在"""

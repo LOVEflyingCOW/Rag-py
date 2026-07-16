@@ -14,6 +14,15 @@ from .document_schemas import (
     SearchResult,
     SearchResponse,
 )
+from .embedding_schemas import (
+    EncodeRequest,
+    EncodeSingleRequest,
+    EncodingInfo,
+    EncodeResponse,
+    SimilarityRequest,
+    SimilarityResponse,
+    EmbeddingStatus,
+)
 from .common_schemas import HealthInfo
 
 __all__ = [
@@ -21,5 +30,7 @@ __all__ = [
     "KnowledgeBaseCreate", "KnowledgeBaseUpdate", "KnowledgeBaseInfo", "KnowledgeBaseListResponse",
     "DocumentInfo", "DocumentListResponse", "ChunkInfo", "DocumentUploadResponse",
     "SearchQuery", "SearchResult", "SearchResponse",
+    "EncodeRequest", "EncodeSingleRequest", "EncodingInfo", "EncodeResponse",
+    "SimilarityRequest", "SimilarityResponse", "EmbeddingStatus",
     "HealthInfo",
 ]
