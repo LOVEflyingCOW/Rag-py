@@ -23,6 +23,21 @@ from .embedding_schemas import (
     SimilarityResponse,
     EmbeddingStatus,
 )
+from .retrieval_schemas import (
+    VectorSearchQuery,
+    VectorSearchItem,
+    VectorSearchResponse,
+    IndexStatusResponse,
+    IndexOperationResponse,
+    GlobalIndexStatusResponse,
+)
+from .chat_schemas import (
+    ChatRequest,
+    ChatMessageItem,
+    ChatResponse,
+    RetrievedChunkItem,
+    LLMProviderInfo,
+)
 from .common_schemas import HealthInfo
 
 __all__ = [
@@ -32,5 +47,8 @@ __all__ = [
     "SearchQuery", "SearchResult", "SearchResponse",
     "EncodeRequest", "EncodeSingleRequest", "EncodingInfo", "EncodeResponse",
     "SimilarityRequest", "SimilarityResponse", "EmbeddingStatus",
+    "VectorSearchQuery", "VectorSearchItem", "VectorSearchResponse",
+    "IndexStatusResponse", "IndexOperationResponse", "GlobalIndexStatusResponse",
+    "ChatRequest", "ChatMessageItem", "ChatResponse", "RetrievedChunkItem", "LLMProviderInfo",
     "HealthInfo",
 ]

@@ -114,14 +114,17 @@ class BaseEmbeddingProvider:
 # ============================================================
 
 class MockEmbeddingProvider(BaseEmbeddingProvider):
-    """基于 Hash 的确定性伪随机向量生成器
+    """基于 Hash + ngram 累加 的确定性伪随机向量生成器
 
-    相同输入 -> 相同向量（可复现）
-    字符重复也会在向量中留下痕迹（让同主题文本稍微相似）
+    核心改进（相较纯 hash）：
+      1. 共享 ngram 的文本会在相同维度累加值 —— 相似文本 → 相似向量
+      2. 基础 hash 只提供初始噪声（约 10%），ngram 提供主要信号
+      3. 支持中文 2-char 窗口 + 英文 3-gram
 
     算法:
-        - 对 hash(seed, i, text) 得到的 4 字节整数做 [-1, 1] 映射，得到 v0
-        - 按字符做加权扰动（同一字符总出现在同一维度）
+        - 提取 char-2gram（中文） + char-3gram（英文）
+        - 每个 ngram -> hash -> 一个固定维度 -> +weight
+        - 小部分用纯 hash 噪声来保证向量非退化
         - L2 归一化
     """
 
@@ -133,34 +136,60 @@ class MockEmbeddingProvider(BaseEmbeddingProvider):
         self.dim = dim
         self.seed = seed
 
-    # ---------- 公开 API ----------
     def encode(self, texts: List[str]) -> List[List[float]]:
         if not texts:
             return []
-        vectors: List[List[float]] = []
-        for text in texts:
-            vectors.append(self._text_to_vector(text))
+        vectors = [self._text_to_vector(t) for t in texts]
         return self._post_process(vectors)
 
-    # ---------- 内部 ----------
-    def _text_to_vector(self, text: str) -> List[float]:
-        # 1. 基础 hash 向量：每维独立 hash
-        vec = [0.0] * self.dim
-        text_bytes = (text or "").encode("utf-8")
-        for i in range(self.dim):
-            h = hashlib.sha256(
-                b"%d:%d:%s" % (self.seed, i, text_bytes)
-            ).digest()
-            val = int.from_bytes(h[:4], "big", signed=False)
-            vec[i] = (val / 0xFFFFFFFF) * 2.0 - 1.0  # [-1, 1]
+    def encode_single(self, text: str) -> List[float]:
+        return self._post_process([self._text_to_vector(text)])[0]
 
-        # 2. 字符层面的扰动：让相似文本更相似
+    # ---------- 内部 ----------
+    def _extract_ngrams(self, text: str) -> List[str]:
+        if not text:
+            return []
+        # 英文按 word-level，中文按 char-level
+        cleaned = text.lower()
+        ngrams = []
+        n = len(cleaned)
+        # 2-gram
+        for i in range(n - 1):
+            ngrams.append(cleaned[i:i + 2])
+        # 3-gram (如果足够长)
+        if n >= 3:
+            for i in range(n - 2):
+                ngrams.append(cleaned[i:i + 3])
+        # 简单"关键词"：以空白切分的 token
+        for tok in re.split(r"[\s,.;:!?()\[\]\"'\-\n]+", cleaned):
+            if len(tok) >= 2:
+                ngrams.append(tok)
+        return ngrams
+
+    def _text_to_vector(self, text: str) -> List[float]:
+        vec = [0.0] * self.dim
+
+        # 1) 主要信号：ngram 累加（语义相关文本会在同维度累加）
+        ngrams = self._extract_ngrams(text or "")
+        for ng in ngrams:
+            h = hashlib.md5(("%d:%s" % (self.seed, ng)).encode("utf-8")).digest()
+            dim_idx = int.from_bytes(h[:4], "big", signed=False) % self.dim
+            # 根据 ngram 长度加权
+            weight = 1.0 + 0.5 * len(ng)
+            vec[dim_idx] += weight
+            # 同一 ngram 在另一个维度也加一点（让信号更强）
+            dim2 = int.from_bytes(h[4:8], "big", signed=False) % self.dim
+            vec[dim2] += weight * 0.7
+
+        # 2) 少量噪声：纯 hash 提供差异化（防止所有文本向量过于相似）
         if text:
-            for ch in text:
-                ch_code = ord(ch)
-                target_dim = ch_code % self.dim
-                weight = (ch_code % 100) / 100.0
-                vec[target_dim] += weight
+            text_bytes = text.encode("utf-8")
+            noise_count = max(3, self.dim // 20)
+            for j in range(noise_count):
+                h = hashlib.sha256(b"%d:noise:%d:%s" % (self.seed, j, text_bytes)).digest()
+                idx = int.from_bytes(h[:4], "big", signed=False) % self.dim
+                val = (int.from_bytes(h[4:8], "big", signed=False) / 0xFFFFFFFF) * 2.0 - 1.0
+                vec[idx] += val * 0.5
 
         return vec
 

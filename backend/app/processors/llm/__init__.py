@@ -1,3 +1,21 @@
 from __future__ import annotations
 
-"""LLM处理 - Day 6 实现"""
+from .llm_service import (
+    BaseLLMProvider,
+    MockLLMProvider,
+    HTTPLLMProvider,
+    LLMService,
+    ChatMessage,
+    ChatResult,
+    get_llm_service,
+)
+
+__all__ = [
+    "BaseLLMProvider",
+    "MockLLMProvider",
+    "HTTPLLMProvider",
+    "LLMService",
+    "ChatMessage",
+    "ChatResult",
+    "get_llm_service",
+]
