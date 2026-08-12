@@ -24,13 +24,13 @@ class Conversation(Base):
 
     owner = relationship("User", back_populates="conversations")
     knowledge_base = relationship("KnowledgeBase", back_populates="conversations")
-    messages = relationship("Message", back_populates="conversation", lazy="dynamic")
+    messages = relationship("ChatMessageRecord", back_populates="conversation", lazy="dynamic")
 
     def __repr__(self):
         return "<Conversation(id=%d, title='%s')>" % (self.id, self.title)
 
 
-class Message(Base):
+class ChatMessageRecord(Base):
     """对话消息表"""
 
     __tablename__ = "messages"
@@ -45,4 +45,4 @@ class Message(Base):
     conversation = relationship("Conversation", back_populates="messages")
 
     def __repr__(self):
-        return "<Message(id=%d, role='%s')>" % (self.id, self.role)
+        return "<ChatMessageRecord(id=%d, role='%s')>" % (self.id, self.role)

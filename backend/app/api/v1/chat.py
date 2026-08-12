@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.core.config import settings
 from app.models.response import ApiResponse
@@ -13,12 +13,18 @@ from app.models.schemas import (
     RetrievedChunkItem,
     LLMProviderInfo,
 )
+from app.models.entities.user import User
+from app.api.dependencies import get_current_user_optional, get_db
+from sqlalchemy.orm import Session
 from app.processors import ChatMessage
 from app.processors.embedding.embedding_service import EmbeddingService
 from app.processors.retrieval.vector_store import VectorStoreManager
 from app.services.chat_service import RAGPipeline
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
+
+from fastapi.responses import StreamingResponse as _StreamingResponse
+import json as _json
 
 
 # ---------- 工具：懒加载 RAG Pipeline ----------
@@ -148,7 +154,47 @@ async def chat_root():
         "rag_min_score": settings.RAG_MIN_SCORE,
         "endpoints": {
             "POST /chat/message": "RAG 对话",
+            "POST /chat/message/stream": "RAG 流式对话(SSE)",
             "POST /chat/search/{kb_id}": "仅向量搜索",
             "GET  /chat/provider": "当前 LLM provider 信息",
         },
     }
+
+
+# ---------- 5) SSE 流式对话接口 ----------
+@router.post("/message/stream")
+def chat_message_stream(payload: ChatRequest):
+    """RAG 流式对话 —— 使用 Server-Sent Events (SSE)
+
+    返回流中每一行都是一个 JSON event：
+      {"type": "retrieval_done", "chunks": [...]}
+      {"type": "token", "content": "..."}
+      {"type": "done", "answer": "...", "model": "..."}
+      {"type": "error", "message": "..."}
+    """
+    pipeline = _get_pipeline()
+    history: List[ChatMessage] = []
+    if payload.history:
+        for h in payload.history[-8:]:
+            role = "assistant" if h.role == "assistant" else "user"
+            history.append(ChatMessage(role=role, content=h.content))
+
+    def sse_generator():
+        try:
+            for event in pipeline.answer_stream(
+                knowledge_base_id=payload.knowledge_base_id,
+                query_text=payload.message,
+                history=history,
+                top_k=payload.top_k,
+                min_score=payload.min_score,
+                temperature=payload.temperature,
+                max_tokens=payload.max_tokens,
+                debug_include_system_prompt=payload.include_raw,
+            ):
+                yield "data: %s\n\n" % _json.dumps(event, ensure_ascii=False)
+        except Exception as exc:
+            yield "data: %s\n\n" % _json.dumps(
+                {"type": "error", "message": str(exc)}, ensure_ascii=False
+            )
+
+    return _StreamingResponse(sse_generator(), media_type="text/event-stream")

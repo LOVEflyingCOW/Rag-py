@@ -17,9 +17,12 @@ class Document(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, index=True)
     filename = Column(String(500), nullable=False)
-    file_path = Column(String(1000), nullable=False)
+    file_path = Column(String(1000), nullable=True)
     file_type = Column(String(50))
+    mime_type = Column(String(100))
     file_size = Column(Integer, default=0)
+    size_bytes = Column(Integer, default=0)
+    description = Column(Text, nullable=True)
     content_text = Column(Text, nullable=True)
     status = Column(String(50), default="pending")
     total_chunks = Column(Integer, default=0)
@@ -27,13 +30,13 @@ class Document(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     knowledge_base = relationship("KnowledgeBase", back_populates="documents")
-    chunks = relationship("Chunk", back_populates="document", lazy="dynamic")
+    chunks = relationship("DocumentChunk", back_populates="document", lazy="dynamic")
 
     def __repr__(self):
         return "<Document(id=%d, filename='%s')>" % (self.id, self.filename)
 
 
-class Chunk(Base):
+class DocumentChunk(Base):
     """文档分块表"""
 
     __tablename__ = "chunks"
@@ -50,4 +53,4 @@ class Chunk(Base):
     document = relationship("Document", back_populates="chunks")
 
     def __repr__(self):
-        return "<Chunk(id=%d, document_id=%d, index=%d)>" % (self.id, self.document_id, self.chunk_index)
+        return "<DocumentChunk(id=%d, document_id=%d, index=%d)>" % (self.id, self.document_id, self.chunk_index)

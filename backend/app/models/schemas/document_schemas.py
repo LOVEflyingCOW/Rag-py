@@ -10,10 +10,18 @@ __all__ = [
     "DocumentListResponse",
     "ChunkInfo",
     "DocumentUploadResponse",
+    "DocumentUploadRequest",
     "SearchQuery",
     "SearchResult",
     "SearchResponse",
 ]
+
+
+class DocumentUploadRequest(BaseModel):
+    """文档上传请求（multipart/form-data 的附加参数）"""
+    knowledge_base_id: int
+    filename: Optional[str] = None
+    description: Optional[str] = None
 
 
 class DocumentInfo(BaseModel):

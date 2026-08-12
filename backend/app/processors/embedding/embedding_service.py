@@ -601,6 +601,10 @@ class EmbeddingService:
         vectors = self._provider.encode([text])
         return vectors[0] if vectors else []
 
+    def encode_batch(self, texts: List[str]) -> List[List[float]]:
+        """批量编码 — 与 encode 等价，语义别名以便调用方选用"""
+        return self.encode(list(texts))
+
     def encode_to_numpy(self, texts: List[str]):
         vectors = self.encode(texts)
         if not vectors:

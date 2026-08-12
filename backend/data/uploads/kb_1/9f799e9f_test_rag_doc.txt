@@ -1,0 +1,3 @@
+RAG (Retrieval-Augmented Generation) is a technique that combines information retrieval with text generation.
+It allows LLMs to access external knowledge bases.
+Vector embeddings are used for semantic search.

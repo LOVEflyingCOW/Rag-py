@@ -15,7 +15,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.entities.document import Document, Chunk
+from app.models.entities.document import Document, DocumentChunk as Chunk
 from app.models.entities.knowledge_base import KnowledgeBase
 from app.processors import (
     DocumentProcessor,
@@ -189,6 +189,8 @@ class DocumentService:
                     "chunk_id_placeholder": i,
                     "document_id": doc.id,
                     "knowledge_base_id": kb_id,
+                    "document_filename": filename,
+                    "content": chunk_info["content"],
                 })
 
             self.db.flush()  # 让 chunk_objs 获得真实的 id
@@ -346,8 +348,20 @@ class DocumentService:
                 store = self.vector_manager.get_store(kb_id, dim=self.embedding.dim)
                 texts = [c.content for c in remaining_chunks]
                 vectors = self.embedding.encode(texts)
+                # 根据 document_id 反查 filename
+                doc_map = {}
+                for d in self.db.query(Document).filter(
+                    Document.knowledge_base_id == kb_id
+                ).all():
+                    doc_map[d.id] = d.filename
                 metas = [
-                    {"chunk_id": c.id, "document_id": c.document_id, "knowledge_base_id": kb_id}
+                    {
+                        "chunk_id": c.id,
+                        "document_id": c.document_id,
+                        "knowledge_base_id": kb_id,
+                        "document_filename": doc_map.get(c.document_id, ""),
+                        "content": c.content,
+                    }
                     for c in remaining_chunks
                 ]
                 v_indices = store.add(vectors, metas)
@@ -423,10 +437,17 @@ class DocumentService:
 
         # 组装结果
         final_results = []
-        for vec_idx, score in results:
+        for r in results:
+            # store.search 返回 List[Dict]: {"index": int, "score": float, "metadata": Dict}
+            vec_idx = r.get("index")
+            score = r.get("score", 0.0)
+            meta = r.get("metadata") or {}
+
+            if vec_idx is None:
+                continue
             if score < min_score:
                 continue
-            meta = store.get_metadata(vec_idx) or {}
+
             chunk_id = meta.get("chunk_id")
             doc_id = meta.get("document_id")
 
@@ -465,8 +486,22 @@ class DocumentService:
         texts = [c.content for c in chunks]
         vectors = self.embedding.encode(texts)
 
+        # 根据 document_id 反查 filename
+        doc_ids = set(c.document_id for c in chunks)
+        doc_map = {}
+        for d in self.db.query(Document).filter(
+            Document.id.in_(doc_ids)
+        ).all():
+            doc_map[d.id] = d.filename
+
         metas = [
-            {"chunk_id": c.id, "document_id": c.document_id, "knowledge_base_id": kb_id}
+            {
+                "chunk_id": c.id,
+                "document_id": c.document_id,
+                "knowledge_base_id": kb_id,
+                "document_filename": doc_map.get(c.document_id, ""),
+                "content": c.content,
+            }
             for c in chunks
         ]
         v_indices = store.add(vectors, metas)

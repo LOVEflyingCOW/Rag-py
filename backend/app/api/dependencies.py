@@ -6,7 +6,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
-from app.models.database import get_db
+from app.models.database import get_db, SessionLocal
 from app.models.entities.user import User
 from app.core.security import extract_user_from_token
 
@@ -16,7 +16,11 @@ security = HTTPBearer(auto_error=False)
 
 def get_db_dep() -> Generator[Session, Any, None]:
     """数据库会话依赖注入"""
-    return next(get_db())
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def get_current_user_optional(

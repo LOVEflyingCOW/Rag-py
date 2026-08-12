@@ -34,7 +34,7 @@ def init_db() -> None:
     """初始化数据库 - 创建所有表"""
     logger.info("Initializing database: %s", settings.DATABASE_URL)
 
-    from app.models.entities import user, knowledge_base, document, conversation
+    import app.models.entities  # noqa: F401 — 触发显式 import，使 relationship 字符串引用可解析
 
     Base.metadata.create_all(bind=engine)
     logger.info("Database initialized successfully")

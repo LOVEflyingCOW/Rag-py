@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import auth, knowledge_base, document, chat, agent, embedding, retrieval
+from app.api.v1 import auth, knowledge_base, document, chat, agent, embedding, retrieval, conversation, integration
 
 api_router = APIRouter(prefix="/v1")
 
@@ -13,3 +13,5 @@ api_router.include_router(embedding.router)
 api_router.include_router(retrieval.router)
 api_router.include_router(chat.router)
 api_router.include_router(agent.router)
+api_router.include_router(conversation.router)
+api_router.include_router(integration.router)

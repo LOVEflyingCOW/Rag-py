@@ -101,7 +101,8 @@ class RAGPipeline:
         vector_manager: Optional[VectorStoreManager] = None,
     ):
         self.embedding = embedding or EmbeddingService()
-        self.vectors = vector_manager or VectorStoreManager(settings.VECTOR_STORE_DIR)
+        self.vector_manager = vector_manager or VectorStoreManager(settings.VECTOR_STORE_DIR)
+        self.vectors = self.vector_manager  # 向后兼容别名
         self.llm = get_llm_service()
 
     # ---------- 1) 检索 ----------
@@ -218,7 +219,7 @@ class RAGPipeline:
         result = RAGPipelineResult(query=query_text, provider=self.llm.provider_name())
 
         # 拒绝回答的分数阈值（低于此值视为"不够相关"）
-        REJECT_SCORE_THRESHOLD = 0.42  # 独立于 min_score，用于"有 chunks 但不相关"判断
+        REJECT_SCORE_THRESHOLD = settings.RAG_MIN_SCORE
 
         try:
             # 1) 检索
@@ -268,3 +269,85 @@ class RAGPipeline:
             _logger.exception("RAG pipeline 异常: %s", exc)
 
         return result
+
+    # ---------- 4+) 流式版：端到端流式生成 ----------
+    def answer_stream(
+        self,
+        knowledge_base_id: int,
+        query_text: str,
+        *,
+        history: Optional[List[ChatMessage]] = None,
+        top_k: Optional[int] = None,
+        min_score: Optional[float] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        debug_include_system_prompt: bool = False,
+    ):
+        """RAG 流式回答 —— 生成器版本。
+        Yields:
+            {"type": "retrieval_done", "chunks": [...]}   - 检索阶段完成（一次性）
+            {"type": "token", "content": "..."}            - LLM token 增量
+            {"type": "done", "answer": "...", "model": "...", "latency_ms": n} - 最终结果
+            {"type": "error", "message": "..."}            - 异常
+        """
+        start = time.perf_counter()
+        REJECT_SCORE_THRESHOLD = settings.RAG_MIN_SCORE
+        try:
+            # 1) 检索
+            chunks = self.search(knowledge_base_id, query_text, top_k=top_k, min_score=min_score)
+            max_score = max((c.score for c in chunks), default=0.0)
+
+            yield {
+                "type": "retrieval_done",
+                "chunks": [c.to_dict() for c in chunks],
+                "max_score": float(max_score),
+            }
+
+            # 无足够上下文 → 直接拒绝（流式，一次性输出）
+            if not chunks or max_score < REJECT_SCORE_THRESHOLD:
+                reject_text = "很抱歉，在知识库中未能检索到足够的相关信息来回答您的问题。"
+                yield {"type": "token", "content": reject_text}
+                yield {
+                    "type": "done",
+                    "answer": reject_text,
+                    "model": "mock-hallucination-filter",
+                    "provider": self.llm.provider_name(),
+                    "success": True,
+                    "latency_ms": (time.perf_counter() - start) * 1000,
+                }
+                return
+
+            # 2) 上下文 + messages
+            ctx = self.build_context(chunks)
+            messages = self.build_messages(query_text, ctx, history=history)
+
+            # 3) 流式 LLM
+            full_answer = []
+            last_model = self.llm.provider_name()
+            for token in self.llm.chat_stream(messages, temperature=temperature, max_tokens=max_tokens):
+                if not token.success:
+                    yield {"type": "error", "message": token.error or "LLM 调用失败"}
+                    return
+                if token.content:
+                    full_answer.append(token.content)
+                    yield {"type": "token", "content": token.content}
+                if token.model:
+                    last_model = token.model
+
+            answer_text = "".join(full_answer)
+            if not answer_text.strip():
+                answer_text = "很抱歉，在知识库中未能检索到足够的相关信息来回答您的问题。"
+                yield {"type": "token", "content": answer_text}
+
+            yield {
+                "type": "done",
+                "answer": answer_text,
+                "model": last_model,
+                "provider": self.llm.provider_name(),
+                "success": True,
+                "latency_ms": (time.perf_counter() - start) * 1000,
+            }
+
+        except Exception as exc:
+            _logger.exception("RAG pipeline 流式异常: %s", exc)
+            yield {"type": "error", "message": str(exc)}

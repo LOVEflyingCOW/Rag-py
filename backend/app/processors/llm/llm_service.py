@@ -22,7 +22,7 @@ import json
 import time
 import random
 import threading
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Iterator, Iterable
 from dataclasses import dataclass
 
 
@@ -69,7 +69,7 @@ class ChatResult:
 # ============ Base Provider ============
 
 class BaseLLMProvider:
-    """LLM Provider 基类 —— 所有 provider 都必须实现 chat()"""
+    """LLM Provider 基类 —— 所有 provider 都必须实现 chat()；chat_stream() 可选重写以获得真正流式。"""
 
     provider_name: str = "base"
 
@@ -87,6 +87,36 @@ class BaseLLMProvider:
         **kwargs,
     ) -> ChatResult:
         raise NotImplementedError("subclass must implement chat()")
+
+    def chat_stream(
+        self,
+        messages: List[ChatMessage],
+        *,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        stop: Optional[List[str]] = None,
+        **kwargs,
+    ) -> Iterator[ChatResult]:
+        """流式 chat —— 默认调用非流式 chat() 并一次性产出结果。
+        子类可以重写以获得真正的 token-by-token 流式输出。"""
+        result = self._chat_impl(messages, temperature=temperature, max_tokens=max_tokens,
+                                 top_p=top_p, stop=stop, **kwargs)
+        yield result
+
+    def _chat_impl(
+        self,
+        messages: List[ChatMessage],
+        *,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        stop: Optional[List[str]] = None,
+        **kwargs,
+    ) -> ChatResult:
+        """内部调用入口 —— 子类应重写 chat()，此方法会自动调用子类的 chat()。"""
+        return self.chat(messages, temperature=temperature, max_tokens=max_tokens,
+                         top_p=top_p, stop=stop, **kwargs)
 
     def count_tokens(self, text: str) -> int:
         """非常粗略的 token 估算：≈ 1 token = 4 chars / 1 词"""
@@ -301,6 +331,55 @@ class MockLLMProvider(BaseLLMProvider):
                 latency_ms=latency,
             )
 
+    def chat_stream(
+        self,
+        messages: List[ChatMessage],
+        *,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        stop: Optional[List[str]] = None,
+        **kwargs,
+    ) -> Iterator[ChatResult]:
+        """Mock 流式 chat —— 先调用 chat() 获得完整内容，再按"词"逐段模拟流式输出。"""
+        # 1) 调用一次非流式 chat 获取最终 answer
+        final = self.chat(messages, temperature=temperature, max_tokens=max_tokens,
+                          top_p=top_p, stop=stop, **kwargs)
+        if not final.success or not final.content:
+            yield final
+            return
+
+        # 2) 按"词/中文片段"拆分成小 token，模拟逐段输出
+        import re as _re
+        raw = final.content
+        # 按：连续英文词 + 标点 + 连续中文字 拆分
+        tokens = _re.findall(r"[A-Za-z0-9]+|[^\x00-\x7F]|[\s\n.,!?;:，。！？；：、]", raw)
+        start_ts = time.perf_counter()
+        buffer = ""
+        # 每 2-4 个 token 产生一段增量，控制节奏
+        group_size = max(1, min(3, len(tokens) // 20))
+        for i in range(0, len(tokens), group_size):
+            chunk_text = "".join(tokens[i:i + group_size])
+            buffer += chunk_text
+            time.sleep(0.02)  # 模拟流式节奏
+            yield ChatResult(
+                content=chunk_text,
+                model=final.model,
+                provider=final.provider,
+                success=True,
+                latency_ms=(time.perf_counter() - start_ts) * 1000,
+            )
+
+        # 最后一条：标记完成（content 为空，usage 填）
+        yield ChatResult(
+            content="",
+            model=final.model,
+            provider=final.provider,
+            success=True,
+            usage=final.usage,
+            latency_ms=(time.perf_counter() - start_ts) * 1000,
+        )
+
 
 # ============ HTTP Provider (DeepSeek / OpenAI / Custom) ============
 
@@ -415,6 +494,117 @@ class HTTPLLMProvider(BaseLLMProvider):
             latency_ms=(time.perf_counter() - start) * 1000,
         )
 
+    # ---------- 流式 chat：真正的 SSE token 增量 ----------
+    def chat_stream(
+        self,
+        messages: List[ChatMessage],
+        *,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        stop: Optional[List[str]] = None,
+        **kwargs,
+    ) -> Iterator[ChatResult]:
+        with self._lock:
+            start = time.perf_counter()
+            if self._session is None:
+                yield ChatResult(
+                    content="", model=self.model, provider=self.provider_name,
+                    success=False, error="requests 未安装",
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                )
+                return
+
+            payload = {
+                "model": self.model,
+                "messages": [m.to_dict() for m in messages],
+                "temperature": temperature if temperature is not None else settings.LLM_TEMPERATURE,
+                "max_tokens": max_tokens if max_tokens is not None else settings.LLM_MAX_TOKENS,
+                "top_p": top_p if top_p is not None else settings.LLM_TOP_P,
+                "stream": True,
+            }
+            if stop:
+                payload["stop"] = stop
+
+            try:
+                response = self._session.post(
+                    "%s/chat/completions" % self.api_url,
+                    headers={
+                        "Authorization": "Bearer %s" % self.api_key,
+                        "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
+                    },
+                    json=payload,
+                    stream=True,
+                    timeout=settings.LLM_TIMEOUT,
+                )
+            except Exception as exc:
+                yield ChatResult(
+                    content="", model=self.model, provider=self.provider_name,
+                    success=False, error="请求异常 (%s): %s" % (type(exc).__name__, str(exc)[:300]),
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                )
+                return
+
+            if response.status_code != 200:
+                yield ChatResult(
+                    content="", model=self.model, provider=self.provider_name,
+                    success=False, error="HTTP %d: %s" % (response.status_code, response.text[:500]),
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                )
+                return
+
+            # SSE 解析：逐行读取 "data: {...}"
+            final_model = self.model
+            full_text = []
+            try:
+                for line in response.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                        except Exception:
+                            continue
+                        choices = data.get("choices", [])
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta", {})
+                        token_text = delta.get("content", "")
+                        if data.get("model"):
+                            final_model = data["model"]
+                        if token_text:
+                            full_text.append(token_text)
+                            yield ChatResult(
+                                content=token_text,
+                                model=final_model,
+                                provider=self.provider_name,
+                                success=True,
+                                latency_ms=(time.perf_counter() - start) * 1000,
+                            )
+            except Exception as exc:
+                yield ChatResult(
+                    content="", model=final_model, provider=self.provider_name,
+                    success=False, error="流式解析异常: %s" % str(exc)[:200],
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                )
+                return
+
+            # 最后一条：标记 done
+            yield ChatResult(
+                content="",
+                model=final_model,
+                provider=self.provider_name,
+                success=True,
+                usage={"prompt_tokens": self._total_tokens(messages),
+                       "completion_tokens": len("".join(full_text)) // 4,
+                       "total_tokens": self._total_tokens(messages) + len("".join(full_text)) // 4},
+                latency_ms=(time.perf_counter() - start) * 1000,
+            )
+
 
 # ============ 工厂方法 ============
 
@@ -454,6 +644,9 @@ class LLMService:
 
     def chat(self, messages: List[ChatMessage], **kwargs) -> ChatResult:
         return self.provider.chat(messages, **kwargs)
+
+    def chat_stream(self, messages: List[ChatMessage], **kwargs) -> Iterator[ChatResult]:
+        return self.provider.chat_stream(messages, **kwargs)
 
     def provider_name(self) -> str:
         return self.provider.provider_name

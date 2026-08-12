@@ -159,6 +159,11 @@ def create_access_token(user_id: int, username: str) -> str:
     return create_jwt_token(payload)
 
 
+def decode_access_token(token: str, secret: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """验证并解析 access token（校验签名 + exp）"""
+    return decode_jwt_token(token, secret=secret)
+
+
 def extract_user_from_token(token: str) -> Optional[Dict[str, Any]]:
     """从 Token 中提取用户信息"""
     payload = decode_jwt_token(token)

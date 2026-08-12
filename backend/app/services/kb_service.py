@@ -102,7 +102,10 @@ class KnowledgeBaseService:
         return kb
 
     def delete(self, kb_id: int, user_id: int) -> bool:
-        """删除知识库（仅限所有者）"""
+        """删除知识库（仅限所有者）
+
+        级联删除：文档分块 → 文档 → 会话消息 → 会话 → 知识库
+        """
         kb = self.db.query(KnowledgeBase).filter(
             and_(
                 KnowledgeBase.id == kb_id,
@@ -113,6 +116,34 @@ class KnowledgeBaseService:
         if kb is None:
             return False
 
+        from app.models.entities.document import Document, DocumentChunk
+        from app.models.entities.conversation import Conversation, ChatMessageRecord
+
+        # 1) 删除所有分块（通过 knowledge_base_id 直接关联）
+        self.db.query(DocumentChunk).filter(
+            DocumentChunk.knowledge_base_id == kb_id
+        ).delete(synchronize_session=False)
+
+        # 2) 删除所有文档
+        self.db.query(Document).filter(
+            Document.knowledge_base_id == kb_id
+        ).delete(synchronize_session=False)
+
+        # 3) 删除会话消息（先查会话 ID，再删消息）
+        conv_ids = [c.id for c in self.db.query(Conversation).filter(
+            Conversation.knowledge_base_id == kb_id
+        ).all()]
+        if conv_ids:
+            self.db.query(ChatMessageRecord).filter(
+                ChatMessageRecord.conversation_id.in_(conv_ids)
+            ).delete(synchronize_session=False)
+
+        # 4) 删除会话
+        self.db.query(Conversation).filter(
+            Conversation.knowledge_base_id == kb_id
+        ).delete(synchronize_session=False)
+
+        # 5) 删除知识库本身
         self.db.delete(kb)
         self.db.commit()
         return True

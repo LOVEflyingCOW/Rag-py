@@ -1,0 +1,215 @@
+﻿
+======================================================================
+  Part A  鐜涓庨厤缃?
+======================================================================
+  [PASS] A.1 椤圭洰鍏抽敭鐩綍瀹屾暣鎬? 鈥?all ok
+  [PASS] A.2 settings 鍔犺浇 & 鐩綍鍒涘缓  鈥?provider=mock, top_k=5
+  [PASS] A.3 渚濊禆 [sqlalchemy]  鈥?import ok
+  [PASS] A.3 渚濊禆 [pydantic]  鈥?import ok
+  [PASS] A.3 渚濊禆 [fastapi]  鈥?import ok
+  [PASS] A.3 渚濊禆 [uvicorn]  鈥?import ok
+  [PASS] A.3 渚濊禆 [passlib]  鈥?import ok
+  [PASS] A.3 渚濊禆 [jwt]  鈥?import ok
+  [PASS] A.4 鍙€変緷璧?[numpy]  鈥?available
+  [PASS] A.4 鍙€変緷璧?[faiss]  鈥?available
+  [PASS] A.4 鍙€変緷璧?[requests]  鈥?not installed (will use fallback)
+
+======================================================================
+  Part B  鏃ュ織 & 瀹夊叏妯″潡
+======================================================================
+2026-07-29 23:02:06 - rag_system - INFO - test_full:129 - test_log_line_1785337326
+  [PASS] B.1 logger 瀹炰緥鍖栦笌 info() 璋冪敤  鈥?log_path=C:\Users\LEgion\Desktop\backend\RAG-PY\backend\data\rag_system.log
+  [PASS] B.2 瀵嗙爜鍝堝笇鍙屽悜鏍￠獙  鈥?hash_prefix=pbkdf2_sha256$100000
+  [PASS] B.3 JWT 绛惧彂/瑙ｆ瀽  鈥?token_prefix=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz
+  [PASS] B.4 JWT 杩囨湡鎷掔  鈥?decoded=None
+
+======================================================================
+  Part C  鏁版嵁搴撳疄浣?& Schema
+======================================================================
+  [PASS] C.1 SQLite 鍐呭瓨浼氳瘽鍒涘缓
+  [PASS] C.2 User 瀹炰綋澧炴煡  鈥?id=1
+  [PASS] C.3 KnowledgeBase 鍒涘缓  鈥?kb_id=1
+  [PASS] C.4 Document + 3 Chunk 鍐欏叆  鈥?doc_id=1
+  [PASS] C.5 鏍稿績 Pydantic Schema 瀹炰緥鍖?
+
+======================================================================
+  Part D  鏂囨。澶勭悊 Pipeline
+======================================================================
+  [PASS] D.1 SemanticChunker 涓嫳娣峰悎鍒嗗潡  鈥?chunks=3
+  [PASS] D.2 MarkdownParser 绾枃鏈彁鍙? 鈥?len=48
+  [PASS] D.3 DocumentPipeline 鏋勯€?
+
+======================================================================
+  Part E  Embedding & Vector Store
+======================================================================
+  [PASS] E.1 EmbeddingService.encode_single  鈥?dim=384
+  [PASS] E.2 EmbeddingService.encode_batch
+  [PASS] E.3 鍚戦噺褰掍竴鍖? 鈥?norm0=1.000000
+  [PASS] E.4 VectorStoreManager 澧炲垹鏌ュ瓨  鈥?top_score=0.583
+  [PASS] E.5 鍚戦噺缁村害鏍￠獙
+
+======================================================================
+  Part F  LLM Provider
+======================================================================
+  [PASS] F.1 閫掑綊淇楠岃瘉 (chat_stream->chat 浠呬竴娆?
+  [PASS] F.2 MockLLMProvider 姝ｅ父鍥炵瓟  鈥?answer[:60]=寰堟姳姝夛紝鍦ㄧ煡璇嗗簱涓湭鑳芥绱㈠埌瓒冲鐨勭浉鍏充俊鎭潵鍥炵瓟鎮ㄧ殑闂銆?
+锛堟彁绀猴細褰撳墠涓?Mock 妯″紡鈥斺€旀湰鍥炵瓟鐢辨湰鍦拌鍒欏紩鎿庣敓鎴愶紝
+  [PASS] F.3 Mock 骞昏鎶戝埗锛堟棤 chunk锛?
+  [PASS] F.4 Mock 娴佸紡杈撳嚭  鈥?tokens=31, total_chars=101
+  [PASS] F.5 Token 浼扮畻
+
+======================================================================
+  Part G  BM25 妫€绱?
+======================================================================
+  [PASS] G.1 BM25 鍒嗚瘝 (涓嫳)  鈥?zh=['鑻规灉', '鏋滄墜', '鎵嬫満', '鏈烘€?, '鎬庝箞'], en=['how', 'refund', 'iphone']
+  [PASS] G.2 BM25 鎵撳垎 + 褰掍竴鍖? 鈥?doc_scores={1: 1.0, 2: 0.182, 3: 0.0, 4: 0.0}
+  [PASS] G.3 BM25 绌哄簱绋冲仴鎬?
+
+======================================================================
+  Part H  娣峰悎妫€绱㈡湇鍔?
+======================================================================
+  [PASS] H.1 娣峰悎鏉冮噸鍜?1  鈥?sum=1.0
+  [PASS] H.2 鍏抽敭璇嶆彁鍙? 鈥?keywords=['iphone', 'refund', '鑻规灉', '鏋滄墜', '鎵嬫満', '鏈洪€€', '閫€娆?, '娆炬斂']
+  [PASS] H.3 鍏抽敭璇嶉噸鍙犲垎  鈥?score=0.750
+  [PASS] H.4 閲嶅彔 chunk 鍚堝苟  鈥?before=3, after=2
+  [PASS] H.5 娣峰悎妫€绱㈢鍒扮  鈥?hits=1
+
+======================================================================
+  Part I  RAG Pipeline
+======================================================================
+  [PASS] I.1 RAGPipeline 鏋勯€?鍚戝悗鍏煎鍒悕
+  [PASS] I.2 RAG 妫€绱? 鈥?hits=3, top_score=0.564
+  [PASS] I.3 RAG 涓婁笅鏂囩粍瑁?鎴柇  鈥?ctx_len=2131
+  [PASS] I.4 骞昏鎶戝埗 L1 (绌哄簱鎷掔瓟)  鈥?answer[:50]=寰堟姳姝夛紝鍦ㄧ煡璇嗗簱涓湭鑳芥绱㈠埌瓒冲鐨勭浉鍏充俊鎭潵鍥炵瓟鎮ㄧ殑闂銆?
+  [PASS] I.5 骞昏鎶戝埗 L2 (浣庡垎鎷掔瓟)  鈥?answer[:60]=寰堟姳姝夛紝鍦ㄧ煡璇嗗簱涓湭鑳芥绱㈠埌瓒冲鐨勭浉鍏充俊鎭潵鍥炵瓟鎮ㄧ殑闂銆?
+锛堟彁绀猴細褰撳墠涓?Mock 妯″紡鈥斺€旀湰鍥炵瓟鐢辨湰鍦拌鍒欏紩鎿庣敓鎴愶紝
+  [PASS] I.6 RAG 绔埌绔甯稿洖绛? 鈥?model=mock-llm, answer[:60]=寰堟姳姝夛紝鍦ㄧ煡璇嗗簱涓湭鑳芥绱㈠埌瓒冲鐨勭浉鍏充俊鎭潵鍥炵瓟鎮ㄧ殑闂銆?
+锛堟彁绀猴細褰撳墠涓?Mock 妯″紡鈥斺€旀湰鍥炵瓟鐢辨湰鍦拌鍒欏紩鎿庣敓鎴愶紝
+  [PASS] I.7 RAG answer_stream 娴佸紡  鈥?events=32, types=['retrieval_done', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'token', 'done']
+  [PASS] I.8 RAG 娴佸紡骞昏鎶戝埗
+  [PASS] I.9 RAG 澶氳疆 history  鈥?history_len=2
+
+======================================================================
+  Part J  Agent
+======================================================================
+  [PASS] J.1 Agent 鏃?DB 鏋勯€? 鈥?tools={}
+  [PASS] J.2 Agent 瑙ｆ瀽 Thought/Action  鈥?action=search_kb
+  [PASS] J.3 Agent Final Answer 鎷彿淇楠岃瘉  鈥?action='Final Answer'
+  [PASS] J.4 Agent system prompt 鍙橀噺鏇挎崲  鈥?len=472
+  [PASS] J.5 Agent 绌?query 鏍￠獙
+  [PASS] J.6 Agent 姝ｅ父鎵ц (Mock)  鈥?steps=1, success=True
+  [PASS] J.7 SearchKBTool 杩愯  鈥?msg=鈥斺€?鐭ヨ瘑搴?#1 妫€绱㈠埌 1 鏉★細
+
+[1] (鏂囨。: , 缁煎悎鍒?1.000, vec=1.00
+  [PASS] J.8 GetDocTool 鍙傛暟鏍￠獙
+
+======================================================================
+  Part K  Integration Service
+======================================================================
+  [PASS] K.1 鐢熸垚 webhook token (shopify)  鈥?token[:30]=shopify_42_577fbd0eb6294b825af
+  [PASS] K.2 generic_http 娓犻亾 token 瑙ｆ瀽 (涓嬪垝绾夸慨澶?
+  [PASS] K.3 鎵€鏈夋湁鏁堟笭閬?token 鏍￠獙
+  [PASS] K.4 闈炴硶 token 鎷掔粷
+  [PASS] K.5 鏄ㄦ棩 token 瀹瑰繊锛堣法澶╁鐏撅級
+  [PASS] K.6 generic_http 澶氬瓧娈靛吋瀹?+ 寮傚父杈撳叆
+  [PASS] K.7 Shopify webhook 瑙ｆ瀽
+  [PASS] K.8 generic 娓叉煋
+  [PASS] K.9 Shopify HTML 娓叉煋 (鍚?XSS 闃叉姢)
+
+======================================================================
+  Part L  API 绔偣 (FastAPI TestClient)
+======================================================================
+  [PASS] L.1 FastAPI TestClient 鍒濆鍖?
+  [PASS] L.2 GET / 鏍硅矾寰? 鈥?keys=['name', 'version', 'status', 'docs', 'health']
+2026-07-29 23:02:10,647 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-07-29 23:02:10,647 INFO sqlalchemy.engine.Engine SELECT 1
+2026-07-29 23:02:10,647 INFO sqlalchemy.engine.Engine [generated in 0.00041s] ()
+2026-07-29 23:02:10,648 INFO sqlalchemy.engine.Engine ROLLBACK
+  [PASS] L.3 GET /health
+  [PASS] L.4 GET /chat/provider  鈥?provider=mock
+  [PASS] L.5 POST /chat/message (L1 鎷掔瓟)  鈥?answer[:60]=寰堟姳姝夛紝鍦ㄧ煡璇嗗簱涓湭鑳芥绱㈠埌瓒冲鐨勭浉鍏充俊鎭潵鍥炵瓟鎮ㄧ殑闂銆?
+  [PASS] L.6 POST /chat/message/stream (SSE)
+2026-07-29 23:02:10,690 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-07-29 23:02:10,693 INFO sqlalchemy.engine.Engine SELECT knowledge_bases.id AS knowledge_bases_id, knowledge_bases.name AS knowledge_bases_name, knowledge_bases.description AS knowledge_bases_description, knowledge_bases.user_id AS knowledge_bases_user_id, knowledge_bases.embedding_model AS knowledge_bases_embedding_model, knowledge_bases.chunk_size AS knowledge_bases_chunk_size, knowledge_bases.chunk_overlap AS knowledge_bases_chunk_overlap, knowledge_bases.is_public AS knowledge_bases_is_public, knowledge_bases.status AS knowledge_bases_status, knowledge_bases.total_documents AS knowledge_bases_total_documents, knowledge_bases.total_chunks AS knowledge_bases_total_chunks, knowledge_bases.created_at AS knowledge_bases_created_at, knowledge_bases.updated_at AS knowledge_bases_updated_at 
+FROM knowledge_bases 
+WHERE knowledge_bases.id = ?
+ LIMIT ? OFFSET ?
+2026-07-29 23:02:10,693 INFO sqlalchemy.engine.Engine [generated in 0.00024s] (9999, 1, 0)
+2026-07-29 23:02:10,696 INFO sqlalchemy.engine.Engine ROLLBACK
+  [PASS] L.7 POST /integration/generic/{kb}/chat  鈥?status=404
+2026-07-29 23:02:10,707 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-07-29 23:02:10,707 INFO sqlalchemy.engine.Engine SELECT knowledge_bases.id AS knowledge_bases_id, knowledge_bases.name AS knowledge_bases_name, knowledge_bases.description AS knowledge_bases_description, knowledge_bases.user_id AS knowledge_bases_user_id, knowledge_bases.embedding_model AS knowledge_bases_embedding_model, knowledge_bases.chunk_size AS knowledge_bases_chunk_size, knowledge_bases.chunk_overlap AS knowledge_bases_chunk_overlap, knowledge_bases.is_public AS knowledge_bases_is_public, knowledge_bases.status AS knowledge_bases_status, knowledge_bases.total_documents AS knowledge_bases_total_documents, knowledge_bases.total_chunks AS knowledge_bases_total_chunks, knowledge_bases.created_at AS knowledge_bases_created_at, knowledge_bases.updated_at AS knowledge_bases_updated_at 
+FROM knowledge_bases 
+WHERE knowledge_bases.id = ?
+ LIMIT ? OFFSET ?
+2026-07-29 23:02:10,707 INFO sqlalchemy.engine.Engine [cached since 0.01515s ago] (1, 1, 0)
+2026-07-29 23:02:10,711 INFO sqlalchemy.engine.Engine ROLLBACK
+  [PASS] L.8 GET /integration/generate-token  鈥?status=200
+2026-07-29 23:02:10,764 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-07-29 23:02:10,766 INFO sqlalchemy.engine.Engine INSERT INTO users (username, email, password_hash, is_active, is_admin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-07-29 23:02:10,766 INFO sqlalchemy.engine.Engine [generated in 0.00060s] ('_test_agent_user', '_test_agent@example.com', 'pbkdf2_sha256$100000$d4bb97515ef19c3a9316bdc13035b58c$03019bb51a5d00f3645750dc8ed594a3a387d3fa58817e362c74710e7ebe9670', 1, 0, '2026-07-29 15:02:10.766858', '2026-07-29 15:02:10.766858')
+2026-07-29 23:02:10,771 INFO sqlalchemy.engine.Engine COMMIT
+2026-07-29 23:02:10,777 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-07-29 23:02:10,778 INFO sqlalchemy.engine.Engine SELECT users.id, users.username, users.email, users.password_hash, users.is_active, users.is_admin, users.created_at, users.updated_at 
+FROM users 
+WHERE users.id = ?
+2026-07-29 23:02:10,779 INFO sqlalchemy.engine.Engine [generated in 0.00040s] (3,)
+2026-07-29 23:02:10,782 INFO sqlalchemy.engine.Engine INSERT INTO knowledge_bases (name, description, user_id, embedding_model, chunk_size, chunk_overlap, is_public, status, total_documents, total_chunks, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+2026-07-29 23:02:10,782 INFO sqlalchemy.engine.Engine [generated in 0.00041s] ('Agent Test KB', 'Agent 娴嬭瘯鐭ヨ瘑搴?, 3, 'default', 500, 50, 1, 'active', 0, 0, '2026-07-29 15:02:10.782882', '2026-07-29 15:02:10.782882')
+2026-07-29 23:02:10,786 INFO sqlalchemy.engine.Engine COMMIT
+2026-07-29 23:02:10,793 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-07-29 23:02:10,794 INFO sqlalchemy.engine.Engine SELECT knowledge_bases.id, knowledge_bases.name, knowledge_bases.description, knowledge_bases.user_id, knowledge_bases.embedding_model, knowledge_bases.chunk_size, knowledge_bases.chunk_overlap, knowledge_bases.is_public, knowledge_bases.status, knowledge_bases.total_documents, knowledge_bases.total_chunks, knowledge_bases.created_at, knowledge_bases.updated_at 
+FROM knowledge_bases 
+WHERE knowledge_bases.id = ?
+2026-07-29 23:02:10,795 INFO sqlalchemy.engine.Engine [generated in 0.00040s] (2,)
+2026-07-29 23:02:10,797 INFO sqlalchemy.engine.Engine ROLLBACK
+  [PASS] L.9 鍓嶇疆: 鍒涘缓娴嬭瘯鐭ヨ瘑搴? 鈥?kb_id=2
+  [PASS] L.9 POST /agent/run  鈥?status=200 keys=['success', 'answer', 'steps', 'latency_ms', 'error']
+2026-07-29 23:02:10,819 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-07-29 23:02:10,821 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.email AS users_email, users.password_hash AS users_password_hash, users.is_active AS users_is_active, users.is_admin AS users_is_admin, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.username = ?
+ LIMIT ? OFFSET ?
+2026-07-29 23:02:10,821 INFO sqlalchemy.engine.Engine [generated in 0.00026s] ('__test_no_use__', 1, 0)
+2026-07-29 23:02:10,823 INFO sqlalchemy.engine.Engine ROLLBACK
+python.exe : C:\Users\LEgion\Desktop\backend\RAG-PY\venv\lib\site-packages\jwt\utils.py:7: CryptographyDeprecation
+Warning: Python 3.7 is no longer supported by the Python core team and support for it is deprecated in cryptograph
+y. The next release of cryptography will remove support for Python 3.7.
+所在位置 行:1 字符: 3024
++ ... PY\backend; & c:\Users\LEgion\Desktop\backend\RAG-PY\venv\Scripts\pyt ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\Users\LEgion...for Python 3.7.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurve
+  [FAIL] L.10 /auth/register
+
+======================================================================
+  Part M  骞跺彂 & 椴佹鎬?
+======================================================================
+  [PASS] M.1 骞跺彂 20 娆?LLM 璋冪敤
+  [PASS] M.2 骞跺彂 10 娆?RAGPipeline
+  [PASS] M.3 寮傚父杈撳叆椴佹鎬?
+  [PASS] M.4 闈炴硶 token 娉ㄥ叆闃叉姢
+
+======================================================================
+  Part N  鎬ц兘鍩哄噯
+======================================================================
+  [PASS] N.1 Embedding 鍗曟寤惰繜 (0.03ms)
+  [PASS] N.2 鍚戦噺鎼滅储 200 鏉″簱 x100 娆?(0.07ms/call)
+  [PASS] N.3 Mock LLM 鍗曟寤惰繜 (0.02ms)
+  [PASS] N.4 RAG 绔埌绔欢杩?(Mock, 0.20ms/call)
+  [PASS] N.5 娴佸紡鍝嶅簲 (930.8ms/run, 150 tokens total)
+
+======================================================================
+  娴嬭瘯姹囨€?
+======================================================================
+  鎬绘暟 : 87
+  閫氳繃 : 86
+  澶辫触 : 1
+
+  --- 澶辫触璇︽儏 ---
+  鉂?[FAIL] L.10 /auth/register | 
+
+ 閫氳繃鐜? 98.85%
+======================================================================

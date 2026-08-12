@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.config import settings
 from app.models.response import ApiResponse
+from app.api.dependencies import get_current_user_optional
+from app.models.entities.user import User
 from app.models.schemas import (
     VectorSearchQuery,
     VectorSearchItem,
@@ -100,6 +102,7 @@ def get_kb_index_status(
 def flush_kb_index(
     kb_id: int,
     manager: VectorStoreManager = Depends(_get_manager),
+    user: Optional[User] = Depends(get_current_user_optional),
 ):
     """将内存中的向量索引强制写入磁盘"""
     ok = manager.save(kb_id)
@@ -178,10 +181,13 @@ def vector_search(
     raw_results = store.search(query_vec, top_k=payload.top_k)
 
     items = []
-    for vec_idx, score in raw_results:
+    for r in raw_results:
+        # store.search 返回 List[Dict]: {"index": int, "score": float, "metadata": Dict}
+        vec_idx = r.get("index")
+        score = r.get("score", 0.0)
+        meta = r.get("metadata") or store.get_metadata(vec_idx) or {}
         if score < payload.min_score:
             continue
-        meta = store.get_metadata(vec_idx) or {}
         items.append(
             VectorSearchItem(
                 vector_index=vec_idx,
