@@ -7,6 +7,7 @@ from .user import User
 from .knowledge_base import KnowledgeBase
 from .document import Document, DocumentChunk
 from .conversation import Conversation, ChatMessageRecord
+from .auth import RefreshToken, Role, Permission, AuditLog
 
 __all__ = [
     "User",
@@ -15,4 +16,8 @@ __all__ = [
     "DocumentChunk",
     "Conversation",
     "ChatMessageRecord",
+    "RefreshToken",
+    "Role",
+    "Permission",
+    "AuditLog",
 ]

@@ -33,7 +33,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from dataclasses import dataclass
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -96,7 +96,7 @@ class IntegrationService:
     # 内置演示用的 secret（生产环境请配置在 settings 中）
     DEFAULT_GENERIC_SECRET = "rag-demo-generic-secret-change-me"
 
-    def __init__(self, db: Optional[Session] = None):
+    def __init__(self, db: Optional[AsyncSession] = None):
         self.db = db
 
     # ---------- 1) 工具: 生成 Webhook Token ----------

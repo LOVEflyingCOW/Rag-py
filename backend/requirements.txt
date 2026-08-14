@@ -1,13 +1,36 @@
-fastapi>=0.100,<0.104
-uvicorn>=0.20,<0.23
-sqlalchemy>=2.0,<2.1
+# ===== Web Framework =====
+fastapi>=0.100,<0.105
+uvicorn[standard]>=0.20
+python-multipart>=0.0.5
+aiofiles>=22.0
+
+# ===== Database (PostgreSQL + async) =====
+sqlalchemy[asyncio]>=2.0,<2.1
+asyncpg>=0.29
+aiosqlite>=0.20
+psycopg2-binary>=2.9
+alembic>=1.13
+pgvector>=0.3
+
+# ===== Cache & Queue =====
+redis>=5.0
+celery>=5.2,<5.3
+kombu>=5.2,<5.3
+
+# ===== LLM & Embedding =====
+httpx>=0.24
+numpy>=1.21,<2.0
+faiss-cpu>=1.7
+
+# ===== Security (Phase 2 预留) =====
+argon2-cffi>=23.1
+PyJWT[crypto]>=2.8
+
+# ===== Utils =====
+python-dotenv>=0.20
 pydantic>=1.10,<2.0
-python-dotenv>=0.20,<2.0
-python-multipart>=0.0.5,<0.0.10
-aiofiles>=22.0,<23.0
-httpx>=0.24,<0.26
-numpy>=1.21,<1.27
-faiss-cpu>=1.7,<1.9
-pytest>=7.0,<8.0
-pytest-asyncio>=0.21,<0.22
 requests>=2.31.0
+
+# ===== Dev & Test =====
+pytest>=7.0
+pytest-asyncio>=0.23

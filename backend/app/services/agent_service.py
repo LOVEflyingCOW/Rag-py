@@ -23,7 +23,8 @@ import time
 from typing import List, Dict, Optional, Any, Callable
 from dataclasses import dataclass, field
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import logger as _logger
@@ -51,7 +52,7 @@ class BaseTool:
     name: str = "base_tool"
     description: str = "基类，请勿直接使用"
 
-    def run(self, args: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
+    async def run(self, args: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
         raise NotImplementedError
 
 
@@ -64,11 +65,11 @@ class SearchKBTool(BaseTool):
         "当你需要查找商家内部文档、FAQ、产品描述、政策条款等信息时，请使用此工具。"
     )
 
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
         self.retrieval = RetrievalService(db)
 
-    def run(self, args: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
+    async def run(self, args: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
         kb_id = args.get("kb_id") or context.get("kb_id")
         query = args.get("query", "").strip()
         top_k = int(args.get("top_k", 5))
@@ -78,7 +79,7 @@ class SearchKBTool(BaseTool):
             return ToolResult(False, "", "需要 kb_id 和 query 参数")
 
         try:
-            hits = self.retrieval.search(
+            hits = await self.retrieval.search(
                 kb_id=int(kb_id),
                 query_text=query,
                 user_id=user_id,
@@ -112,17 +113,21 @@ class GetDocTool(BaseTool):
         "当你已经通过 search_kb 找到一个相关文档，但需要看全文以获得更完整信息时，使用此工具。"
     )
 
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
 
-    def run(self, args: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
+    async def run(self, args: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
         doc_id = args.get("document_id")
         if not doc_id:
             return ToolResult(False, "", "需要 document_id 参数")
-        doc = self.db.query(Document).filter(Document.id == int(doc_id)).first()
+        result = await self.db.execute(select(Document).where(Document.id == int(doc_id)))
+        doc = result.scalars().first()
         if doc is None:
             return ToolResult(False, "", f"找不到 document_id={doc_id}")
-        chunks = self.db.query(DocumentChunk).filter(DocumentChunk.document_id == int(doc_id)).order_by(DocumentChunk.id).all()
+        result = await self.db.execute(
+            select(DocumentChunk).where(DocumentChunk.document_id == int(doc_id)).order_by(DocumentChunk.id)
+        )
+        chunks = result.scalars().all()
         content = "\n\n".join([c.content for c in chunks if c.content]) or doc.description or "(文档无正文)"
         return ToolResult(
             True,
@@ -191,7 +196,7 @@ $TOOL_LIST
 【请开始你的推理循环】
 """
 
-    def __init__(self, db: Optional[Session] = None):
+    def __init__(self, db: Optional[AsyncSession] = None):
         self.db = db
         self.llm = get_llm_service()
         self._build_tools()
@@ -204,7 +209,7 @@ $TOOL_LIST
             self.tools[GetDocTool.name] = GetDocTool(self.db)
 
     # ---------- 主入口 ----------
-    def run(
+    async def run(
         self,
         query: str,
         *,
@@ -303,7 +308,7 @@ $TOOL_LIST
 
             # 执行工具
             context = {"kb_id": kb_id, "user_id": user_id, "query": query, "turn": turn}
-            tool_output = self.tools[action].run(tool_args, context)
+            tool_output = await self.tools[action].run(tool_args, context)
             step.observation = tool_output.content[:1500] if tool_output.success else f"(工具失败) {tool_output.error}"
 
             # 把 observation 作为 user message 追加 → 让 LLM 下一步

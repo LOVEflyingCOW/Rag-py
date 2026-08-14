@@ -1,0 +1,133 @@
+version: "3.9"
+
+services:
+  # ---- PostgreSQL 16 + pgvector ----
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: rag-postgres
+    environment:
+      POSTGRES_DB: rag_system
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rag_dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d rag_system"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---- Redis 7 ----
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ---- RabbitMQ (Phase 3 预留) ----
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rag-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: rag_user
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-rag_password}
+      RABBITMQ_DEFAULT_VHOST: rag_vhost
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    profiles:
+      - full
+
+  # ---- API 服务 (可选: 本地开发时不用 Docker 跑 API) ----
+  api:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile
+    container_name: rag-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://rag_user:rag_dev_password@postgres:5432/rag_system
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/data:/app/data
+    restart: unless-stopped
+    profiles:
+      - full
+
+  # ---- Celery Worker (后台任务) ----
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile
+    container_name: rag-celery-worker
+    command: celery -A app.core.celery_app worker --loglevel=info --pool=solo --queues=audit,document,default
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://rag_user:rag_dev_password@postgres:5432/rag_system
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/data:/app/data
+    restart: unless-stopped
+    profiles:
+      - full
+
+  # ---- Celery Beat (定时任务调度) ----
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile
+    container_name: rag-celery-beat
+    command: celery -A app.core.celery_app beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://rag_user:rag_dev_password@postgres:5432/rag_system
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - full
+
+volumes:
+  pg_data:
+  redis_data:
+  rabbitmq_data:

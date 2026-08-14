@@ -14,8 +14,8 @@ from app.models.schemas import (
     LLMProviderInfo,
 )
 from app.models.entities.user import User
-from app.api.dependencies import get_current_user_optional, get_db
-from sqlalchemy.orm import Session
+from app.api.dependencies import get_current_user_optional
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.processors import ChatMessage
 from app.processors.embedding.embedding_service import EmbeddingService
 from app.processors.retrieval.vector_store import VectorStoreManager
@@ -42,7 +42,7 @@ def _get_pipeline() -> RAGPipeline:
 
 # ---------- 1) 主对话接口 ----------
 @router.post("/message", response_model=ApiResponse[ChatResponse])
-def chat_message(payload: ChatRequest):
+async def chat_message(payload: ChatRequest):
     """RAG 对话 —— 单轮/多轮对话
 
     流程：
@@ -61,7 +61,7 @@ def chat_message(payload: ChatRequest):
             role = "assistant" if h.role == "assistant" else "user"
             history.append(ChatMessage(role=role, content=h.content))
 
-    rag_result = pipeline.answer(
+    rag_result = await pipeline.answer(
         knowledge_base_id=payload.knowledge_base_id,
         query_text=payload.message,
         history=history,
@@ -100,7 +100,7 @@ def chat_message(payload: ChatRequest):
 
 # ---------- 2) 仅搜索（不调用 LLM） ----------
 @router.post("/search/{kb_id}", response_model=ApiResponse[dict])
-def chat_search_only(kb_id: int, payload: dict):
+async def chat_search_only(kb_id: int, payload: dict):
     """仅做向量搜索 —— 返回 top-k chunks，供前端预览/调试"""
     query_text = (payload or {}).get("query_text", "")
     if not query_text:
@@ -119,7 +119,7 @@ def chat_search_only(kb_id: int, payload: dict):
 
 # ---------- 3) Provider 信息 ----------
 @router.get("/provider", response_model=ApiResponse[LLMProviderInfo])
-def get_provider():
+async def get_provider():
     """查看当前 LLM provider / 模型信息"""
     from app.processors import get_llm_service
     llm = get_llm_service()
@@ -163,7 +163,7 @@ async def chat_root():
 
 # ---------- 5) SSE 流式对话接口 ----------
 @router.post("/message/stream")
-def chat_message_stream(payload: ChatRequest):
+async def chat_message_stream(payload: ChatRequest):
     """RAG 流式对话 —— 使用 Server-Sent Events (SSE)
 
     返回流中每一行都是一个 JSON event：
@@ -179,9 +179,9 @@ def chat_message_stream(payload: ChatRequest):
             role = "assistant" if h.role == "assistant" else "user"
             history.append(ChatMessage(role=role, content=h.content))
 
-    def sse_generator():
+    async def sse_generator():
         try:
-            for event in pipeline.answer_stream(
+            async for event in pipeline.answer_stream(
                 knowledge_base_id=payload.knowledge_base_id,
                 query_text=payload.message,
                 history=history,

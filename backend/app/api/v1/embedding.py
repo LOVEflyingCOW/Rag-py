@@ -71,7 +71,7 @@ def _interpret_similarity(score: float) -> str:
 # ---------- API ----------
 
 @router.get("/status", response_model=ApiResponse[EmbeddingStatus])
-def get_status(
+async def get_status(
     service: EmbeddingService = Depends(get_embedding_service),
 ):
     """获取当前 Embedding 服务的状态与质量速览"""
@@ -97,7 +97,7 @@ def get_status(
 
 
 @router.post("/encode", response_model=ApiResponse[EncodeResponse])
-def encode_texts(
+async def encode_texts(
     payload: EncodeRequest,
     service: EmbeddingService = Depends(get_embedding_service),
 ):
@@ -134,7 +134,7 @@ def encode_texts(
 
 
 @router.post("/encode-single", response_model=ApiResponse[EncodeResponse])
-def encode_single_text(
+async def encode_single_text(
     payload: EncodeSingleRequest,
     service: EmbeddingService = Depends(get_embedding_service),
 ):
@@ -162,7 +162,7 @@ def encode_single_text(
 
 
 @router.post("/similarity", response_model=ApiResponse[SimilarityResponse])
-def compute_similarity(
+async def compute_similarity(
     payload: SimilarityRequest,
     service: EmbeddingService = Depends(get_embedding_service),
 ):

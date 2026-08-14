@@ -46,10 +46,22 @@ class UserInfo(BaseModel):
 class TokenData(BaseModel):
     """Token 响应数据"""
     access_token: str
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
+    expires_in: int = 900
     user: UserInfo
 
 
 class UserCreateResponse(BaseModel):
     """注册成功响应"""
     user: UserInfo
+
+
+class RefreshTokenRequest(BaseModel):
+    """Refresh Token 请求"""
+    refresh_token: str = Field(..., description="Refresh Token")
+
+
+class LogoutRequest(BaseModel):
+    """登出请求"""
+    refresh_token: Optional[str] = Field(None, description="Refresh Token (可选, 同时撤销)")

@@ -1,4 +1,7 @@
-from .user_schemas import UserRegister, UserLogin, UserInfo, TokenData, UserCreateResponse
+from .user_schemas import (
+    UserRegister, UserLogin, UserInfo, TokenData, UserCreateResponse,
+    RefreshTokenRequest, LogoutRequest,
+)
 from .kb_schemas import (
     KnowledgeBaseCreate,
     KnowledgeBaseUpdate,
@@ -43,6 +46,7 @@ from .common_schemas import HealthInfo
 
 __all__ = [
     "UserRegister", "UserLogin", "UserInfo", "TokenData", "UserCreateResponse",
+    "RefreshTokenRequest", "LogoutRequest",
     "KnowledgeBaseCreate", "KnowledgeBaseUpdate", "KnowledgeBaseInfo", "KnowledgeBaseListResponse",
     "DocumentInfo", "DocumentListResponse", "ChunkInfo", "DocumentUploadResponse",
     "DocumentUploadRequest",

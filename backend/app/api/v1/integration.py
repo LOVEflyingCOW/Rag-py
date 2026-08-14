@@ -19,10 +19,10 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy import select, delete, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_db_dep, get_current_user_optional
-from app.models.entities.user import User
+from app.api.dependencies import get_db_dep, get_current_user_optional, CurrentUser
 from app.processors.llm.llm_service import ChatMessage
 from app.services.integration_service import (
     IntegrationService,
@@ -61,11 +61,11 @@ class GenerateTokenRequest(BaseModel):
 # ---------- 1) 通用 HTTP Chat 入口（最简接入方式） ----------
 
 @router.post("/generic/{kb_id}/chat")
-def generic_chat(
+async def generic_chat(
     kb_id: int,
     payload: GenericChatRequest,
     request: Request,
-    db: Session = Depends(get_db_dep),
+    db: AsyncSession = Depends(get_db_dep),
     x_forwarded_for: Optional[str] = Header(default=None),
 ):
     """通用 HTTP 客服聊天接口 —— 推荐给 Shopify App Proxy 或自家前端直接调用
@@ -82,7 +82,8 @@ def generic_chat(
 
     # A) 校验 kb_id 是否存在
     from app.models.entities.knowledge_base import KnowledgeBase
-    kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+    result = await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+    kb = result.scalars().first()
     if kb is None:
         raise HTTPException(status_code=404, detail=f"知识库 #{kb_id} 不存在")
 
@@ -91,7 +92,7 @@ def generic_chat(
         if payload.use_agent:
             # Agent 模式（多步推理 + 工具调用）
             agent = AgentService(db)
-            agent_result = agent.run(
+            agent_result = await agent.run(
                 query=payload.query,
                 kb_id=kb_id,
                 max_turns=payload.max_turns,
@@ -124,7 +125,7 @@ def generic_chat(
                 for h in (payload.history or [])
                 if isinstance(h, dict) and h.get("role") in {"user", "assistant", "system"}
             ]
-            rag_result = rag.answer(
+            rag_result = await rag.answer(
                 knowledge_base_id=kb_id,
                 query_text=payload.query,
                 history=history_msgs,
@@ -171,7 +172,7 @@ def generic_chat(
 async def webhook_entry(
     token: str,
     request: Request,
-    db: Session = Depends(get_db_dep),
+    db: AsyncSession = Depends(get_db_dep),
     content_type: Optional[str] = Header(default=None),
     x_shopify_topic: Optional[str] = Header(default=None),
     x_shopify_hmac_sha256: Optional[str] = Header(default=None),
@@ -229,7 +230,7 @@ async def webhook_entry(
             embedding=EmbeddingService(),
             vector_manager=VectorStoreManager(_tmp_dir),
         )
-        result = rag.answer(
+        result = await rag.answer(
             knowledge_base_id=kb_id,
             query_text=msg.query_text,
             history=[],
@@ -260,22 +261,23 @@ async def webhook_entry(
 # ---------- 3) 生成 Webhook Token ----------
 
 @router.get("/generate-token/{kb_id}")
-def generate_webhook_token_endpoint(
+async def generate_webhook_token_endpoint(
     kb_id: int,
     channel: str = "generic_http",
-    db: Session = Depends(get_db_dep),
-    user: Optional[User] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db_dep),
+    user: Optional[CurrentUser] = Depends(get_current_user_optional),
 ):
     """生成 Webhook 访问 Token（可选校验用户是否有该知识库权限）"""
     if channel not in VALID_CHANNELS:
         raise HTTPException(status_code=400, detail=f"channel 必须是 {sorted(VALID_CHANNELS)} 之一")
     from app.models.entities.knowledge_base import KnowledgeBase
-    kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+    result = await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+    kb = result.scalars().first()
     if kb is None:
         raise HTTPException(status_code=404, detail="知识库不存在")
     # 可选的权限校验（如果 user 存在且非管理员，检查是否 owner）
-    if user and not (getattr(user, "is_admin", False) or getattr(user, "role", "") == "admin"):
-        if kb.user_id != user.id:
+    if user and not user.is_admin:
+        if kb.user_id != user.user_id:
             raise HTTPException(status_code=403, detail="无权为该知识库生成 token")
     token = IntegrationService.generate_webhook_token(channel, kb_id)
     return {
@@ -297,7 +299,7 @@ def generate_webhook_token_endpoint(
 # ---------- 4) 根路径 ----------
 
 @router.get("/")
-def integration_root():
+async def integration_root():
     return {
         "service": "integration",
         "description": "外部渠道集成（Shopify / 通用 HTTP Webhook / 微信等）",

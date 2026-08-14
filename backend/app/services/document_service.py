@@ -12,7 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select, delete, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.entities.document import Document, DocumentChunk as Chunk
@@ -28,7 +29,7 @@ from app.processors import (
 class DocumentService:
     """文档服务"""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
         self._processor: Optional[DocumentProcessor] = None
         self._embedding: Optional[EmbeddingService] = None
@@ -61,29 +62,93 @@ class DocumentService:
     # ============================================================
     # 权限检查
     # ============================================================
-    def _check_kb_owner(self, kb_id: int, user_id: int) -> Optional[KnowledgeBase]:
+    async def _check_kb_owner(self, kb_id: int, user_id: int) -> Optional[KnowledgeBase]:
         """检查用户是否为知识库所有者"""
-        kb = self.db.query(KnowledgeBase).filter(
-            KnowledgeBase.id == kb_id,
-            KnowledgeBase.user_id == user_id,
-        ).first()
+        result = await self.db.execute(
+            select(KnowledgeBase).where(
+                KnowledgeBase.id == kb_id,
+                KnowledgeBase.user_id == user_id,
+            )
+        )
+        kb = result.scalars().first()
         return kb
 
-    def _check_document_owner(self, doc_id: int, user_id: int) -> Optional[Document]:
-        doc = self.db.query(Document).filter(Document.id == doc_id).first()
+    async def _check_document_owner(self, doc_id: int, user_id: int) -> Optional[Document]:
+        result = await self.db.execute(
+            select(Document).where(Document.id == doc_id)
+        )
+        doc = result.scalars().first()
         if doc is None:
             return None
         # 通过知识库检查权限
-        kb = self.db.query(KnowledgeBase).filter(
-            KnowledgeBase.id == doc.knowledge_base_id,
-            KnowledgeBase.user_id == user_id,
-        ).first()
+        result = await self.db.execute(
+            select(KnowledgeBase).where(
+                KnowledgeBase.id == doc.knowledge_base_id,
+                KnowledgeBase.user_id == user_id,
+            )
+        )
+        kb = result.scalars().first()
         return doc if kb else None
 
     # ============================================================
     # 文件上传
     # ============================================================
-    def process_upload(
+
+    # 异步处理阈值: 文件大于此值时走 Celery 异步处理 (bytes)
+    ASYNC_THRESHOLD = 500 * 1024  # 500KB
+
+    async def prepare_upload(
+        self,
+        kb_id: int,
+        user_id: int,
+        filename: str,
+        file_content: bytes,
+    ) -> Optional[Tuple[Document, str]]:
+        """准备文件上传 — 保存文件 + 创建 Document 记录 (status=processing)
+
+        不做文本提取/分块/向量化. 用于 Celery 异步处理的前置步骤.
+
+        Returns: (Document, file_path) 或 None (权限不足)
+        """
+        # 1. 权限检查
+        kb = await self._check_kb_owner(kb_id, user_id)
+        if kb is None:
+            return None
+
+        # 2. 检查文件类型
+        suffix = Path(filename).suffix.lower()
+        if not suffix:
+            suffix = ".txt"
+
+        # 3. 保存文件
+        kb_upload_dir = os.path.join(settings.UPLOAD_DIR, "kb_%d" % kb_id)
+        Path(kb_upload_dir).mkdir(parents=True, exist_ok=True)
+        safe_filename = "%s_%s" % (uuid.uuid4().hex[:8], Path(filename).name)
+        file_path = os.path.join(kb_upload_dir, safe_filename)
+
+        with open(file_path, "wb") as f:
+            f.write(file_content)
+
+        file_size = len(file_content)
+
+        # 4. 创建 Document 记录 (status=processing)
+        file_type = self.processor.detect_file_type(file_path)
+        doc = Document(
+            knowledge_base_id=kb_id,
+            filename=filename,
+            file_path=file_path,
+            file_type=file_type,
+            file_size=file_size,
+            status="processing",
+            total_chunks=0,
+        )
+        self.db.add(doc)
+        await self.db.commit()
+        await self.db.refresh(doc)
+
+        return doc, file_path
+
+    async def process_upload(
         self,
         kb_id: int,
         user_id: int,
@@ -102,7 +167,7 @@ class DocumentService:
         5. 更新 Document 状态为 processed
         """
         # 1. 权限检查
-        kb = self._check_kb_owner(kb_id, user_id)
+        kb = await self._check_kb_owner(kb_id, user_id)
         if kb is None:
             return None
 
@@ -134,7 +199,7 @@ class DocumentService:
             total_chunks=0,
         )
         self.db.add(doc)
-        self.db.flush()
+        await self.db.flush()
 
         try:
             # 5. 提取文本
@@ -144,8 +209,8 @@ class DocumentService:
             if not text or len(text.strip()) < 10:
                 doc.status = "skipped"
                 doc.total_chunks = 0
-                self.db.commit()
-                self.db.refresh(doc)
+                await self.db.commit()
+                await self.db.refresh(doc)
                 return doc
 
             # 6. 智能分块
@@ -160,8 +225,8 @@ class DocumentService:
             if not chunks_data:
                 doc.status = "processed"
                 doc.total_chunks = 0
-                self.db.commit()
-                self.db.refresh(doc)
+                await self.db.commit()
+                await self.db.refresh(doc)
                 return doc
 
             # 7. 向量化
@@ -193,7 +258,7 @@ class DocumentService:
                     "content": chunk_info["content"],
                 })
 
-            self.db.flush()  # 让 chunk_objs 获得真实的 id
+            await self.db.flush()  # 让 chunk_objs 获得真实的 id
 
             # 更新 metadata 中的 chunk_id
             for i, chunk_obj in enumerate(chunk_objs):
@@ -216,21 +281,21 @@ class DocumentService:
             kb.total_documents = (kb.total_documents or 0) + 1
             kb.total_chunks = (kb.total_chunks or 0) + len(chunk_objs)
 
-            self.db.commit()
-            self.db.refresh(doc)
+            await self.db.commit()
+            await self.db.refresh(doc)
             return doc
 
         except Exception as e:
             doc.status = "error"
             doc.content_text = str(e)[:2000]
-            self.db.commit()
-            self.db.refresh(doc)
+            await self.db.commit()
+            await self.db.refresh(doc)
             raise
 
     # ============================================================
     # 查询
     # ============================================================
-    def list_documents(
+    async def list_documents(
         self,
         kb_id: int,
         user_id: Optional[int],
@@ -239,7 +304,10 @@ class DocumentService:
     ) -> Tuple[List[Document], int]:
         """获取知识库的文档列表"""
         # 权限: 可以访问自己的知识库 + 公开知识库
-        kb = self.db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        result = await self.db.execute(
+            select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
+        )
+        kb = result.scalars().first()
         if kb is None:
             return [], 0
 
@@ -247,37 +315,49 @@ class DocumentService:
         if not can_access:
             return [], 0
 
-        query = self.db.query(Document).filter(Document.knowledge_base_id == kb_id)
-        total = query.count()
+        total_result = await self.db.execute(
+            select(func.count()).select_from(Document).where(
+                Document.knowledge_base_id == kb_id
+            )
+        )
+        total = total_result.scalar()
 
-        docs = (
-            query.order_by(Document.created_at.desc())
+        docs_result = await self.db.execute(
+            select(Document)
+            .where(Document.knowledge_base_id == kb_id)
+            .order_by(Document.created_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
-            .all()
         )
+        docs = docs_result.scalars().all()
         return docs, total
 
-    def get_document(
+    async def get_document(
         self,
         doc_id: int,
         user_id: Optional[int],
     ) -> Optional[Document]:
         """获取单个文档"""
-        doc = self.db.query(Document).filter(Document.id == doc_id).first()
+        result = await self.db.execute(
+            select(Document).where(Document.id == doc_id)
+        )
+        doc = result.scalars().first()
         if doc is None:
             return None
 
-        kb = self.db.query(KnowledgeBase).filter(
-            KnowledgeBase.id == doc.knowledge_base_id
-        ).first()
+        result = await self.db.execute(
+            select(KnowledgeBase).where(
+                KnowledgeBase.id == doc.knowledge_base_id
+            )
+        )
+        kb = result.scalars().first()
         if kb is None:
             return None
 
         can_access = (user_id is not None and kb.user_id == user_id) or kb.is_public
         return doc if can_access else None
 
-    def get_document_chunks(
+    async def get_document_chunks(
         self,
         doc_id: int,
         user_id: Optional[int],
@@ -285,31 +365,39 @@ class DocumentService:
         page_size: int = 20,
     ) -> Tuple[List[Chunk], int]:
         """获取文档的分块列表"""
-        doc = self.get_document(doc_id, user_id)
+        doc = await self.get_document(doc_id, user_id)
         if doc is None:
             return [], 0
 
-        query = self.db.query(Chunk).filter(Chunk.document_id == doc_id)
-        total = query.count()
-        chunks = (
-            query.order_by(Chunk.chunk_index.asc())
+        total_result = await self.db.execute(
+            select(func.count()).select_from(Chunk).where(Chunk.document_id == doc_id)
+        )
+        total = total_result.scalar()
+
+        chunks_result = await self.db.execute(
+            select(Chunk)
+            .where(Chunk.document_id == doc_id)
+            .order_by(Chunk.chunk_index.asc())
             .offset((page - 1) * page_size)
             .limit(page_size)
-            .all()
         )
+        chunks = chunks_result.scalars().all()
         return chunks, total
 
     # ============================================================
     # 删除
     # ============================================================
-    def delete_document(self, doc_id: int, user_id: int) -> bool:
+    async def delete_document(self, doc_id: int, user_id: int) -> bool:
         """删除文档（仅知识库所有者）"""
-        doc = self._check_document_owner(doc_id, user_id)
+        doc = await self._check_document_owner(doc_id, user_id)
         if doc is None:
             return False
 
         kb_id = doc.knowledge_base_id
-        kb = self.db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        result = await self.db.execute(
+            select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
+        )
+        kb = result.scalars().first()
 
         # 删除磁盘文件
         try:
@@ -319,13 +407,16 @@ class DocumentService:
             pass
 
         # 删除 chunks
-        chunks = self.db.query(Chunk).filter(Chunk.document_id == doc_id).all()
+        chunks_result = await self.db.execute(
+            select(Chunk).where(Chunk.document_id == doc_id)
+        )
+        chunks = chunks_result.scalars().all()
         deleted_chunk_count = len(chunks)
         for chunk in chunks:
-            self.db.delete(chunk)
+            await self.db.delete(chunk)
 
         # 删除文档
-        self.db.delete(doc)
+        await self.db.delete(doc)
 
         # 更新知识库统计
         if kb:
@@ -337,12 +428,12 @@ class DocumentService:
         if self.vector_manager.has_store(kb_id):
             self.vector_manager.delete(kb_id)
             # 重新索引剩余文档的 chunk
-            remaining_chunks = (
-                self.db.query(Chunk)
-                .filter(Chunk.knowledge_base_id == kb_id)
+            remaining_result = await self.db.execute(
+                select(Chunk)
+                .where(Chunk.knowledge_base_id == kb_id)
                 .order_by(Chunk.id.asc())
-                .all()
             )
+            remaining_chunks = remaining_result.scalars().all()
             if remaining_chunks:
                 # 重新向量化（这里简化处理：只重建向量索引结构）
                 store = self.vector_manager.get_store(kb_id, dim=self.embedding.dim)
@@ -350,9 +441,12 @@ class DocumentService:
                 vectors = self.embedding.encode(texts)
                 # 根据 document_id 反查 filename
                 doc_map = {}
-                for d in self.db.query(Document).filter(
-                    Document.knowledge_base_id == kb_id
-                ).all():
+                docs_result = await self.db.execute(
+                    select(Document).where(
+                        Document.knowledge_base_id == kb_id
+                    )
+                )
+                for d in docs_result.scalars().all():
                     doc_map[d.id] = d.filename
                 metas = [
                     {
@@ -369,19 +463,22 @@ class DocumentService:
                     c.vector_index = vi
                 self.vector_manager.save(kb_id)
 
-        self.db.commit()
+        await self.db.commit()
         return True
 
-    def delete_all_for_kb(self, kb_id: int, user_id: int) -> int:
+    async def delete_all_for_kb(self, kb_id: int, user_id: int) -> int:
         """删除知识库下的所有文档"""
-        kb = self._check_kb_owner(kb_id, user_id)
+        kb = await self._check_kb_owner(kb_id, user_id)
         if kb is None:
             return 0
 
-        docs = self.db.query(Document).filter(Document.knowledge_base_id == kb_id).all()
+        docs_result = await self.db.execute(
+            select(Document).where(Document.knowledge_base_id == kb_id)
+        )
+        docs = docs_result.scalars().all()
         count = 0
         for doc in docs:
-            if self.delete_document(doc.id, user_id):
+            if await self.delete_document(doc.id, user_id):
                 count += 1
 
         # 删除向量存储
@@ -393,7 +490,7 @@ class DocumentService:
     # ============================================================
     # 向量搜索
     # ============================================================
-    def search_in_kb(
+    async def search_in_kb(
         self,
         kb_id: int,
         user_id: Optional[int],
@@ -403,7 +500,10 @@ class DocumentService:
     ) -> List[Dict[str, Any]]:
         """在知识库中进行语义搜索"""
         # 权限检查
-        kb = self.db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        result = await self.db.execute(
+            select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
+        )
+        kb = result.scalars().first()
         if kb is None:
             return []
         can_access = (user_id is not None and kb.user_id == user_id) or kb.is_public
@@ -411,9 +511,12 @@ class DocumentService:
             return []
 
         # 检查知识库是否有分块
-        total_chunks = (
-            self.db.query(Chunk).filter(Chunk.knowledge_base_id == kb_id).count()
+        total_chunks_result = await self.db.execute(
+            select(func.count()).select_from(Chunk).where(
+                Chunk.knowledge_base_id == kb_id
+            )
         )
+        total_chunks = total_chunks_result.scalar()
         if total_chunks == 0:
             return []
 
@@ -422,7 +525,7 @@ class DocumentService:
 
         # 如果向量索引还没有数据（可能是从磁盘加载或首次使用），需要确保已有 chunk 被索引
         if store.total() == 0:
-            self._rebuild_vector_index(kb_id)
+            await self._rebuild_vector_index(kb_id)
             store = self.vector_manager.get_store(kb_id, dim=self.embedding.dim)
             if store.total() == 0:
                 return []
@@ -454,10 +557,16 @@ class DocumentService:
             if chunk_id is None:
                 continue
 
-            chunk = self.db.query(Chunk).filter(Chunk.id == chunk_id).first()
+            chunk_result = await self.db.execute(
+                select(Chunk).where(Chunk.id == chunk_id)
+            )
+            chunk = chunk_result.scalars().first()
             if chunk is None:
                 continue
-            doc = self.db.query(Document).filter(Document.id == chunk.document_id).first()
+            doc_result = await self.db.execute(
+                select(Document).where(Document.id == chunk.document_id)
+            )
+            doc = doc_result.scalars().first()
 
             final_results.append({
                 "chunk_id": chunk.id,
@@ -470,14 +579,14 @@ class DocumentService:
 
         return final_results
 
-    def _rebuild_vector_index(self, kb_id: int) -> None:
+    async def _rebuild_vector_index(self, kb_id: int) -> None:
         """重建某个知识库的向量索引"""
-        chunks = (
-            self.db.query(Chunk)
-            .filter(Chunk.knowledge_base_id == kb_id)
+        chunks_result = await self.db.execute(
+            select(Chunk)
+            .where(Chunk.knowledge_base_id == kb_id)
             .order_by(Chunk.id.asc())
-            .all()
         )
+        chunks = chunks_result.scalars().all()
         if not chunks:
             return
 
@@ -489,9 +598,10 @@ class DocumentService:
         # 根据 document_id 反查 filename
         doc_ids = set(c.document_id for c in chunks)
         doc_map = {}
-        for d in self.db.query(Document).filter(
-            Document.id.in_(doc_ids)
-        ).all():
+        docs_result = await self.db.execute(
+            select(Document).where(Document.id.in_(doc_ids))
+        )
+        for d in docs_result.scalars().all():
             doc_map[d.id] = d.filename
 
         metas = [
@@ -508,7 +618,7 @@ class DocumentService:
         for c, vi in zip(chunks, v_indices):
             c.vector_index = vi
 
-        self.db.commit()
+        await self.db.commit()
         self.vector_manager.save(kb_id)
 
 

@@ -7,8 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.config import settings
 from app.models.response import ApiResponse
-from app.api.dependencies import get_current_user_optional
-from app.models.entities.user import User
+from app.api.dependencies import get_current_user_optional, CurrentUser
 from app.models.schemas import (
     VectorSearchQuery,
     VectorSearchItem,
@@ -51,7 +50,7 @@ def _get_embedding() -> EmbeddingService:
 
 # ---------- 全局索引状态 ----------
 @router.get("/status", response_model=ApiResponse[GlobalIndexStatusResponse])
-def get_global_status(
+async def get_global_status(
     manager: VectorStoreManager = Depends(_get_manager),
 ):
     """全局索引状态 - 列出磁盘上所有知识库索引"""
@@ -70,7 +69,7 @@ def get_global_status(
 
 # ---------- 知识库索引状态 ----------
 @router.get("/index/{kb_id}", response_model=ApiResponse[IndexStatusResponse])
-def get_kb_index_status(
+async def get_kb_index_status(
     kb_id: int,
     manager: VectorStoreManager = Depends(_get_manager),
 ):
@@ -99,10 +98,10 @@ def get_kb_index_status(
 
 # ---------- 强制落盘 ----------
 @router.post("/index/{kb_id}/flush", response_model=ApiResponse[IndexOperationResponse])
-def flush_kb_index(
+async def flush_kb_index(
     kb_id: int,
     manager: VectorStoreManager = Depends(_get_manager),
-    user: Optional[User] = Depends(get_current_user_optional),
+    user: Optional[CurrentUser] = Depends(get_current_user_optional),
 ):
     """将内存中的向量索引强制写入磁盘"""
     ok = manager.save(kb_id)
@@ -117,7 +116,7 @@ def flush_kb_index(
 
 # ---------- 删除索引 ----------
 @router.delete("/index/{kb_id}", response_model=ApiResponse[IndexOperationResponse])
-def delete_kb_index(
+async def delete_kb_index(
     kb_id: int,
     manager: VectorStoreManager = Depends(_get_manager),
 ):
@@ -134,7 +133,7 @@ def delete_kb_index(
 
 # ---------- 清理内存缓存 ----------
 @router.post("/index/clear-memory", response_model=ApiResponse[IndexOperationResponse])
-def clear_memory_cache(
+async def clear_memory_cache(
     manager: VectorStoreManager = Depends(_get_manager),
 ):
     """释放内存中已加载的所有索引（磁盘文件保留）"""
@@ -150,7 +149,7 @@ def clear_memory_cache(
 
 # ---------- 直接向量搜索 (文本 -> 向量 -> top_k) ----------
 @router.post("/search/{kb_id}", response_model=ApiResponse[VectorSearchResponse])
-def vector_search(
+async def vector_search(
     kb_id: int,
     payload: VectorSearchQuery,
     manager: VectorStoreManager = Depends(_get_manager),

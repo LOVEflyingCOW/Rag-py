@@ -32,7 +32,20 @@ class UserInfo(BaseModel):
 
 class TokenData(BaseModel):
     access_token: str
+    refresh_token: Optional[str] = None
+    token_type: str = "bearer"
+    expires_in: int = 900  # Access Token 有效期 (秒)
     user: UserInfo
+
+
+class RefreshTokenRequest(BaseModel):
+    """Refresh Token 请求"""
+    refresh_token: str = Field(..., description="Refresh Token")
+
+
+class LogoutRequest(BaseModel):
+    """登出请求"""
+    refresh_token: Optional[str] = Field(None, description="Refresh Token (可选, 同时撤销)")
 
 
 # ============ Health ============
@@ -42,6 +55,7 @@ class HealthInfo(BaseModel):
     app_name: str
     version: str
     database: str
+    redis: Optional[str] = None
     timestamp: datetime
 
 

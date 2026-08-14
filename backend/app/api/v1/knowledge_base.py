@@ -3,10 +3,9 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_db_dep, get_current_user, get_current_user_optional
-from app.models.entities.user import User
+from app.api.dependencies import get_db_dep, get_current_user, get_current_user_optional, CurrentUser
 from app.models.schemas import (
     KnowledgeBaseCreate,
     KnowledgeBaseUpdate,
@@ -21,33 +20,33 @@ router = APIRouter(prefix="/knowledge-bases", tags=["知识库"])
 
 
 @router.post("", response_model=ApiResponse[KnowledgeBaseInfo])
-def create_kb(
+async def create_kb(
     payload: KnowledgeBaseCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_dep),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_dep),
 ):
     """创建知识库（需要登录）"""
     service = KnowledgeBaseService(db)
-    kb = service.create(payload, user_id=current_user.id)
+    kb = await service.create(payload, user_id=current_user.user_id)
     return ApiResponse[KnowledgeBaseInfo](data=KnowledgeBaseInfo.from_orm(kb))
 
 
 @router.get("", response_model=ApiResponse[KnowledgeBaseListResponse])
-def list_kbs(
+async def list_kbs(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页条数"),
     keyword: Optional[str] = Query(None, description="搜索关键词"),
-    current_user: Optional[User] = Depends(get_current_user_optional),
-    db: Session = Depends(get_db_dep),
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db_dep),
 ):
     """获取知识库列表
 
     - 未登录：仅返回公开的知识库
     - 已登录：返回自己的 + 公开的知识库
     """
-    user_id = current_user.id if current_user else None
+    user_id = current_user.user_id if current_user else None
     service = KnowledgeBaseService(db)
-    items, total = service.list(user_id=user_id, page=page, page_size=page_size, keyword=keyword)
+    items, total = await service.list(user_id=user_id, page=page, page_size=page_size, keyword=keyword)
 
     data = KnowledgeBaseListResponse(
         items=[KnowledgeBaseInfo.from_orm(kb) for kb in items],
@@ -59,15 +58,15 @@ def list_kbs(
 
 
 @router.get("/{kb_id}", response_model=ApiResponse[KnowledgeBaseInfo])
-def get_kb(
+async def get_kb(
     kb_id: int,
-    current_user: Optional[User] = Depends(get_current_user_optional),
-    db: Session = Depends(get_db_dep),
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db_dep),
 ):
     """获取单个知识库详情"""
-    user_id = current_user.id if current_user else None
+    user_id = current_user.user_id if current_user else None
     service = KnowledgeBaseService(db)
-    kb = service.get_by_id(kb_id, user_id=user_id)
+    kb = await service.get_by_id(kb_id, user_id=user_id)
 
     if kb is None:
         raise HTTPException(
@@ -79,15 +78,15 @@ def get_kb(
 
 
 @router.put("/{kb_id}", response_model=ApiResponse[KnowledgeBaseInfo])
-def update_kb(
+async def update_kb(
     kb_id: int,
     payload: KnowledgeBaseUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_dep),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_dep),
 ):
     """更新知识库（仅限所有者）"""
     service = KnowledgeBaseService(db)
-    kb = service.update(kb_id, payload, user_id=current_user.id)
+    kb = await service.update(kb_id, payload, user_id=current_user.user_id)
 
     if kb is None:
         raise HTTPException(
@@ -99,14 +98,14 @@ def update_kb(
 
 
 @router.delete("/{kb_id}", response_model=ApiResponse[dict])
-def delete_kb(
+async def delete_kb(
     kb_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_dep),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_dep),
 ):
     """删除知识库（仅限所有者）"""
     service = KnowledgeBaseService(db)
-    success = service.delete(kb_id, user_id=current_user.id)
+    success = await service.delete(kb_id, user_id=current_user.user_id)
 
     if not success:
         raise HTTPException(

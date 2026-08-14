@@ -14,4 +14,5 @@ class HealthInfo(BaseModel):
     app_name: str
     version: str
     database: str
+    redis: Optional[str] = None
     timestamp: datetime

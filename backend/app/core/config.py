@@ -16,31 +16,50 @@ class Settings(BaseSettings):
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
 
-    DATABASE_URL: str = "sqlite:///./data/rag_system.db"
+    # ===== 数据库 (PostgreSQL) =====
+    # 异步驱动 URL (asyncpg) — 用于 API 层
+    DATABASE_URL: str = "postgresql+asyncpg://rag_user:rag_dev_password@localhost:5432/rag_system"
+    # 同步驱动 URL (psycopg2) — 用于 Alembic 迁移
+    DATABASE_SYNC_URL: str = "postgresql+psycopg2://rag_user:rag_dev_password@localhost:5432/rag_system"
 
+    # 连接池
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT: int = 30
+    DB_POOL_RECYCLE: int = 3600
+
+    # ===== Redis =====
+    REDIS_URL: str = "redis://localhost:6379/0"
+
+    # ===== Celery (Phase 3) =====
+    CELERY_BROKER_URL: str = "redis://localhost:6379/1"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
+    CELERY_TASK_TIME_LIMIT: int = 600          # 单任务最大执行时间 (秒)
+    CELERY_TASK_SOFT_TIME_LIMIT: int = 540    # 软超时 (提前 60s 通知)
+    CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1  # 每次只取 1 个任务 (公平调度)
+    CELERY_WORKER_MAX_TASKS_PER_CHILD: int = 100  # 子进程执行 100 个任务后回收 (防内存泄漏)
+
+    # ===== 鉴权 =====
     SECRET_KEY: str = "change-this-in-production"
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_MINUTES: int = 1440
+    JWT_ACCESS_EXPIRE_MINUTES: int = 15
+    JWT_REFRESH_EXPIRE_DAYS: int = 7
+    JWT_EXPIRE_MINUTES: int = 1440  # 兼容旧配置
 
     # ===== 大语言模型 (LLM) 配置 =====
-    # DeepSeek (DeepSeek Chat / Reasoner)
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_API_URL: str = "https://api.deepseek.com/v1"
     DEEPSEEK_MODEL: str = "deepseek-chat"
 
-    # OpenAI 兼容 (GPT-3.5/4)
     OPENAI_API_KEY: str = ""
     OPENAI_API_URL: str = "https://api.openai.com/v1"
     OPENAI_MODEL: str = "gpt-3.5-turbo"
 
-    # 当前使用的 provider: "mock" | "deepseek" | "openai" | "custom"
     LLM_PROVIDER: str = "mock"
-    # 如果 LLM_PROVIDER=custom, 使用以下 API
     LLM_CUSTOM_API_URL: str = ""
     LLM_CUSTOM_API_KEY: str = ""
     LLM_CUSTOM_MODEL: str = "custom-model"
 
-    # 生成参数
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 1024
     LLM_TOP_P: float = 0.9
@@ -48,7 +67,7 @@ class Settings(BaseSettings):
     LLM_MAX_RETRIES: int = 3
     LLM_RETRY_BACKOFF: float = 1.5
 
-    # ===== Embedding (向量) 配置 =====
+    # ===== Embedding 配置 =====
     EMBEDDING_API_KEY: str = ""
     EMBEDDING_API_URL: str = ""
     EMBEDDING_MODEL: str = "bge-m3"
@@ -62,12 +81,13 @@ class Settings(BaseSettings):
     RAG_TOP_K: int = 5
     RAG_MIN_SCORE: float = 0.35
     RAG_MAX_CONTEXT_CHARS: int = 3000
-    RAG_REQUIRE_SOURCE: bool = True  # 要求 LLM 回答必须基于检索内容
+    RAG_REQUIRE_SOURCE: bool = True
 
-    # 文件上传
+    # ===== 文件存储 =====
     UPLOAD_DIR: str = "./data/uploads"
     VECTOR_STORE_DIR: str = "./data/vector_stores"
 
+    # ===== CORS =====
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
 
     class Config:
@@ -77,6 +97,26 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def is_sqlite(self) -> bool:
+        return "sqlite" in self.DATABASE_URL
+
+    @property
+    def database_url_async(self) -> str:
+        """返回异步驱动 URL"""
+        url = self.DATABASE_URL
+        if url.startswith("postgresql://"):
+            return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return url
+
+    @property
+    def database_url_sync(self) -> str:
+        """返回同步驱动 URL (Alembic 用)"""
+        url = self.DATABASE_SYNC_URL or self.DATABASE_URL
+        if url.startswith("postgresql+asyncpg://"):
+            return url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+        return url
 
     @property
     def embedding_provider_name(self) -> str:

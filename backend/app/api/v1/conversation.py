@@ -6,13 +6,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import logger
 from app.models.response import ApiResponse
-from app.models.entities.user import User
-from app.api.dependencies import get_current_user_optional, get_db_dep
-from sqlalchemy.orm import Session
+from app.api.dependencies import get_current_user_optional, get_db_dep, CurrentUser
 
 router = APIRouter(prefix="/conversation", tags=["Conversation"])
 
@@ -45,9 +44,9 @@ class MessageItem(BaseModel):
 
 
 @router.get("", response_model=ApiResponse[List[ConversationItem]])
-def list_conversations(
-    user: Optional[User] = Depends(get_current_user_optional),
-    db: Session = Depends(get_db_dep),
+async def list_conversations(
+    user: Optional[CurrentUser] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db_dep),
 ):
     """列出当前用户的所有会话"""
     if user is None:
@@ -55,7 +54,7 @@ def list_conversations(
 
     from app.services.conversation_service import ConversationService
     service = ConversationService(db)
-    raw = service.list_conversations(user.id)
+    raw = await service.list_conversations(user.user_id)
     items = [
         ConversationItem(
             id=r["id"],
@@ -71,10 +70,10 @@ def list_conversations(
 
 
 @router.post("", response_model=ApiResponse[ConversationItem])
-def create_conversation(
+async def create_conversation(
     payload: ConversationCreate,
-    user: Optional[User] = Depends(get_current_user_optional),
-    db: Session = Depends(get_db_dep),
+    user: Optional[CurrentUser] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db_dep),
 ):
     """创建一个新会话"""
     if user is None:
@@ -82,8 +81,8 @@ def create_conversation(
 
     from app.services.conversation_service import ConversationService
     service = ConversationService(db)
-    conv = service.create_conversation(
-        user_id=user.id,
+    conv = await service.create_conversation(
+        user_id=user.user_id,
         title=payload.title or "新对话",
         knowledge_base_id=payload.knowledge_base_id,
     )
@@ -100,10 +99,10 @@ def create_conversation(
 
 
 @router.get("/{conv_id}", response_model=ApiResponse[List[MessageItem]])
-def get_messages(
+async def get_messages(
     conv_id: int,
-    user: Optional[User] = Depends(get_current_user_optional),
-    db: Session = Depends(get_db_dep),
+    user: Optional[CurrentUser] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db_dep),
 ):
     """获取一个会话的完整消息历史"""
     if user is None:
@@ -113,11 +112,11 @@ def get_messages(
     service = ConversationService(db)
 
     # 先校验归属
-    conv = service.get_conversation(conv_id, user.id)
+    conv = await service.get_conversation(conv_id, user.user_id)
     if conv is None:
         return ApiResponse[List[MessageItem]](success=False, code=404, message="会话不存在或无权访问")
 
-    raw = service.get_messages(conv_id, user.id)
+    raw = await service.get_messages(conv_id, user.user_id)
     items = [
         MessageItem(
             id=m["id"],
@@ -132,10 +131,10 @@ def get_messages(
 
 
 @router.delete("/{conv_id}", response_model=ApiResponse[bool])
-def delete_conversation(
+async def delete_conversation(
     conv_id: int,
-    user: Optional[User] = Depends(get_current_user_optional),
-    db: Session = Depends(get_db_dep),
+    user: Optional[CurrentUser] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db_dep),
 ):
     """删除一个会话及其所有消息"""
     if user is None:
@@ -143,7 +142,7 @@ def delete_conversation(
 
     from app.services.conversation_service import ConversationService
     service = ConversationService(db)
-    ok = service.delete_conversation(conv_id, user.id)
+    ok = await service.delete_conversation(conv_id, user.user_id)
     return ApiResponse[bool](
         data=ok,
         success=ok,

@@ -196,7 +196,7 @@ class RAGPipeline:
         return messages
 
     # ---------- 4) 端到端调用 ----------
-    def answer(
+    async def answer(
         self,
         knowledge_base_id: int,
         query_text: str,
@@ -271,7 +271,7 @@ class RAGPipeline:
         return result
 
     # ---------- 4+) 流式版：端到端流式生成 ----------
-    def answer_stream(
+    async def answer_stream(
         self,
         knowledge_base_id: int,
         query_text: str,

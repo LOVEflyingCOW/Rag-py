@@ -4,10 +4,9 @@ from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_db_dep, get_current_user_optional
-from app.models.entities.user import User
-from sqlalchemy.orm import Session
+from app.api.dependencies import get_db_dep, get_current_user_optional, CurrentUser
 
 from app.services.agent_service import AgentService
 
@@ -46,10 +45,10 @@ class AgentResponse(BaseModel):
 # ---------- 1) 主接口：Agent 推理 ----------
 
 @router.post("/run", response_model=AgentResponse)
-def agent_run(
+async def agent_run(
     payload: AgentQueryRequest,
-    db: Session = Depends(get_db_dep),
-    user: Optional[User] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db_dep),
+    user: Optional[CurrentUser] = Depends(get_current_user_optional),
 ):
     """执行 Agent 推理循环 —— 通过 ReAct 风格查询知识库并回答用户问题
 
@@ -62,10 +61,10 @@ def agent_run(
         raise HTTPException(status_code=400, detail="knowledge_base_id 不能为空")
 
     agent = AgentService(db)
-    result = agent.run(
+    result = await agent.run(
         query=payload.query,
         kb_id=payload.knowledge_base_id,
-        user_id=user.id if user else None,
+        user_id=user.user_id if user else None,
         max_turns=payload.max_turns,
         history=payload.history,
         include_raw_steps=payload.include_raw_steps,
@@ -92,7 +91,7 @@ def agent_run(
 # ---------- 2) 工具列表（供前端调试/展示） ----------
 
 @router.get("/tools")
-def agent_tools(db: Session = Depends(get_db_dep)):
+async def agent_tools(db: AsyncSession = Depends(get_db_dep)):
     """返回当前 Agent 可用的工具列表"""
     agent = AgentService(db)
     return {

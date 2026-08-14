@@ -12,7 +12,8 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 import json
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select, delete, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -26,11 +27,11 @@ class ConversationService:
     MAX_MESSAGES_PER_CONVERSATION = 200
     MAX_CONVERSATIONS_PER_USER = 50
 
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
 
     # ---------- 会话: 创建 / 查询 ----------
-    def create_conversation(
+    async def create_conversation(
         self,
         user_id: int,
         title: str = "新对话",
@@ -38,20 +39,23 @@ class ConversationService:
     ) -> Conversation:
         """创建一个新的对话会话"""
         # 超限清理：删除最旧的
-        total = self.db.query(Conversation).filter(Conversation.user_id == user_id).count()
+        result = await self.db.execute(
+            select(func.count()).select_from(Conversation).where(Conversation.user_id == user_id)
+        )
+        total = result.scalar()
         if total >= self.MAX_CONVERSATIONS_PER_USER:
-            oldest = (
-                self.db.query(Conversation)
-                .filter(Conversation.user_id == user_id)
+            result = await self.db.execute(
+                select(Conversation)
+                .where(Conversation.user_id == user_id)
                 .order_by(Conversation.updated_at.asc())
-                .first()
             )
+            oldest = result.scalars().first()
             if oldest:
-                self.db.query(Message).filter(
-                    Message.conversation_id == oldest.id
-                ).delete(synchronize_session=False)
-                self.db.delete(oldest)
-                self.db.commit()
+                await self.db.execute(
+                    delete(Message).where(Message.conversation_id == oldest.id)
+                )
+                await self.db.delete(oldest)
+                await self.db.commit()
                 logger.info("ConversationService: 清理用户 %d 最旧的会话 %d", user_id, oldest.id)
 
         conv = Conversation(
@@ -60,80 +64,85 @@ class ConversationService:
             knowledge_base_id=knowledge_base_id,
         )
         self.db.add(conv)
-        self.db.commit()
-        self.db.refresh(conv)
+        await self.db.commit()
+        await self.db.refresh(conv)
         return conv
 
-    def list_conversations(self, user_id: int) -> List[Dict[str, Any]]:
+    async def list_conversations(self, user_id: int) -> List[Dict[str, Any]]:
         """列出用户的所有会话（按更新时间倒序）"""
-        convs = (
-            self.db.query(Conversation)
-            .filter(Conversation.user_id == user_id)
+        result = await self.db.execute(
+            select(Conversation)
+            .where(Conversation.user_id == user_id)
             .order_by(Conversation.updated_at.desc())
-            .all()
         )
-        return [
-            {
+        convs = result.scalars().all()
+        out: List[Dict[str, Any]] = []
+        for c in convs:
+            cnt_result = await self.db.execute(
+                select(func.count()).select_from(Message).where(Message.conversation_id == c.id)
+            )
+            msg_count = cnt_result.scalar()
+            out.append({
                 "id": c.id,
                 "title": c.title,
                 "knowledge_base_id": c.knowledge_base_id,
                 "created_at": c.created_at,
                 "updated_at": c.updated_at,
-                "message_count": (
-                    self.db.query(Message)
-                    .filter(Message.conversation_id == c.id)
-                    .count()
-                ),
-            }
-            for c in convs
-        ]
+                "message_count": msg_count,
+            })
+        return out
 
-    def get_conversation(self, conv_id: int, user_id: Optional[int]) -> Optional[Conversation]:
+    async def get_conversation(self, conv_id: int, user_id: Optional[int]) -> Optional[Conversation]:
         """获取单个会话（带所属校验；user_id=None 表示已在外部校验过）"""
-        conv = self.db.query(Conversation).filter(Conversation.id == conv_id).first()
+        result = await self.db.execute(
+            select(Conversation).where(Conversation.id == conv_id)
+        )
+        conv = result.scalars().first()
         if conv is None:
             return None
         if user_id is not None and conv.user_id != user_id:
             return None
         return conv
 
-    def rename_conversation(self, conv_id: int, user_id: int, new_title: str) -> Optional[Conversation]:
-        conv = self.get_conversation(conv_id, user_id)
+    async def rename_conversation(self, conv_id: int, user_id: int, new_title: str) -> Optional[Conversation]:
+        conv = await self.get_conversation(conv_id, user_id)
         if conv is None:
             return None
         conv.title = (new_title or "")[:80] or "新对话"
         conv.updated_at = datetime.utcnow()
-        self.db.commit()
-        self.db.refresh(conv)
+        await self.db.commit()
+        await self.db.refresh(conv)
         return conv
 
-    def delete_conversation(self, conv_id: int, user_id: int) -> bool:
-        conv = self.get_conversation(conv_id, user_id)
+    async def delete_conversation(self, conv_id: int, user_id: int) -> bool:
+        conv = await self.get_conversation(conv_id, user_id)
         if conv is None:
             return False
-        self.db.query(Message).filter(Message.conversation_id == conv.id).delete(synchronize_session=False)
-        self.db.delete(conv)
-        self.db.commit()
+        await self.db.execute(delete(Message).where(Message.conversation_id == conv.id))
+        await self.db.delete(conv)
+        await self.db.commit()
         return True
 
     # ---------- 消息: 追加 / 查询 ----------
-    def append_user_message(self, conv_id: int, content: str, user_id: int,
+    async def append_user_message(self, conv_id: int, content: str, user_id: int,
                           extra: Optional[Dict[str, Any]] = None) -> Optional[Message]:
         """追加一条 user 消息"""
-        conv = self.get_conversation(conv_id, user_id)
+        conv = await self.get_conversation(conv_id, user_id)
         if conv is None:
             return None
-        msg = self._append_message(
+        msg = await self._append_message(
             conv_id=conv.id, role="user", content=content, extra=extra)
         conv.updated_at = datetime.utcnow()
-        msg_count = self.db.query(Message).filter(
-            Message.conversation_id == conv.id).count()
+        cnt_result = await self.db.execute(
+            select(func.count()).select_from(Message).where(Message.conversation_id == conv.id)
+        )
+        msg_count = cnt_result.scalar()
         if msg_count <= 2 and (conv.title in ("新对话", "New Conversation", None, "")):
             conv.title = content[:30]
-        self.db.commit()
+        await self.db.commit()
         return msg
 
-    def append_assistant_message(
+    async def append_assistant_message(
         self,
         conv_id: int,
         content: str,
@@ -141,16 +150,16 @@ class ConversationService:
         extra: Optional[Dict[str, Any]] = None,
     ) -> Optional[Message]:
         """追加一条 assistant 消息"""
-        conv = self.get_conversation(conv_id, user_id)
+        conv = await self.get_conversation(conv_id, user_id)
         if conv is None:
             return None
-        msg = self._append_message(conv_id=conv.id, role="assistant",
+        msg = await self._append_message(conv_id=conv.id, role="assistant",
                                    content=content, extra=extra)
         conv.updated_at = datetime.utcnow()
-        self.db.commit()
+        await self.db.commit()
         return msg
 
-    def _append_message(self, conv_id: int, role: str, content: str,
+    async def _append_message(self, conv_id: int, role: str, content: str,
                         extra: Optional[Dict[str, Any]] = None) -> Message:
         msg = Message(
             conversation_id=conv_id,
@@ -161,43 +170,46 @@ class ConversationService:
         self.db.add(msg)
 
         # 超限：删除最早的超出部分
-        total = self.db.query(Message).filter(Message.conversation_id == conv_id).count()
+        cnt_result = await self.db.execute(
+            select(func.count()).select_from(Message).where(Message.conversation_id == conv_id)
+        )
+        total = cnt_result.scalar()
         if total > self.MAX_MESSAGES_PER_CONVERSATION:
-            to_remove = (
-                self.db.query(Message)
-                .filter(Message.conversation_id == conv_id)
+            result = await self.db.execute(
+                select(Message)
+                .where(Message.conversation_id == conv_id)
                 .order_by(Message.id.asc())
                 .limit(total - self.MAX_MESSAGES_PER_CONVERSATION)
-                .all()
             )
+            to_remove = result.scalars().all()
             for m in to_remove:
-                self.db.delete(m)
+                await self.db.delete(m)
 
-        self.db.flush()
-        self.db.commit()
-        self.db.refresh(msg)
+        await self.db.flush()
+        await self.db.commit()
+        await self.db.refresh(msg)
         return msg
 
-    def get_messages(self, conv_id: int, user_id: int,
+    async def get_messages(self, conv_id: int, user_id: int,
                     limit: int = 50) -> List[Dict[str, Any]]:
         """获取一个会话的消息列表（最新的在末尾）"""
-        conv = self.get_conversation(conv_id, user_id)
+        conv = await self.get_conversation(conv_id, user_id)
         if conv is None:
             return []
-        msgs = (
-            self.db.query(Message)
-            .filter(Message.conversation_id == conv.id)
+        result = await self.db.execute(
+            select(Message)
+            .where(Message.conversation_id == conv.id)
             .order_by(Message.id.asc())
             .limit(limit)
-            .all()
         )
-        result = []
+        msgs = result.scalars().all()
+        out: List[Dict[str, Any]] = []
         for m in msgs:
             try:
                 meta = json.loads(m.retrieved_contexts) if m.retrieved_contexts else {}
             except Exception:
                 meta = {}
-            result.append({
+            out.append({
                 "id": m.id,
                 "conversation_id": m.conversation_id,
                 "role": m.role,
@@ -205,16 +217,16 @@ class ConversationService:
                 "metadata": meta,
                 "created_at": m.created_at,
             })
-        return result
+        return out
 
-    def get_llm_context(
+    async def get_llm_context(
         self,
         conv_id: int,
         user_id: int,
         max_turns: int = 6,
     ) -> List[LlmChatMessage]:
         """获取给 LLM 作为上下文的最近若干轮对话"""
-        raw = self.get_messages(conv_id, user_id, limit=max_turns * 2)
+        raw = await self.get_messages(conv_id, user_id, limit=max_turns * 2)
         ctx: List[LlmChatMessage] = []
         for m in raw:
             if m["role"] in ("user", "assistant", "system"):

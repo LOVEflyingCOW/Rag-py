@@ -1,178 +1,318 @@
 from __future__ import annotations
 
+"""
+安全模块 — Argon2id 密码哈希 + PyJWT 双 Token 机制
+
+功能:
+1. Argon2id 密码哈希与验证
+2. Access Token (短时, 15min)
+3. Refresh Token (长时, 7d, 支持轮换和撤销)
+4. Token 黑名单 (Redis SET + EXPIRE, 内存降级)
+5. Token 校验与用户提取
+"""
+
+import asyncio
 import hashlib
-import hmac
-import json
-import os
-import base64
 import time
-from typing import Dict, Optional, Any
+import uuid
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, Set
+
+import jwt
+from argon2 import PasswordHasher, Type
+from argon2.exceptions import VerifyMismatchError, InvalidHashError
 
 from app.core.config import settings
 
-_HASH_ALGORITHM = "sha256"
-_PBKDF2_ITERATIONS = 100000
-_SALT_LENGTH = 16
+
+# ============================================================
+#  Argon2id 密码哈希
+# ============================================================
+
+_pwd_hasher = PasswordHasher(
+    time_cost=2,        # 迭代次数 (开发: 2, 生产: 3+)
+    memory_cost=16384,  # 16MB (开发: 16MB, 生产: 64MB+)
+    parallelism=2,      # 并行线程
+    type=Type.ID,       # Argon2id
+)
 
 
-def generate_salt() -> str:
-    """生成随机盐值 (hex)"""
-    return os.urandom(_SALT_LENGTH).hex()
+def hash_password(password: str) -> str:
+    """使用 Argon2id 哈希密码"""
+    return _pwd_hasher.hash(password)
 
 
-def hash_password(password: str, salt: Optional[str] = None) -> str:
-    """使用 PBKDF2-HMAC 哈希密码
-
-    返回格式: pbkdf2_sha256$iterations$salt$hash_hex
-    """
-    if salt is None:
-        salt = generate_salt()
-
-    password_bytes = password.encode("utf-8")
-    salt_bytes = salt.encode("utf-8")
-
-    key = hashlib.pbkdf2_hmac(
-        _HASH_ALGORITHM,
-        password_bytes,
-        salt_bytes,
-        _PBKDF2_ITERATIONS,
-        dklen=32
-    )
-
-    return "pbkdf2_sha256$%d$%s$%s" % (_PBKDF2_ITERATIONS, salt, key.hex())
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """验证密码"""
+def verify_password(password: str, hashed: str) -> bool:
+    """验证密码是否匹配哈希"""
     try:
-        parts = hashed_password.split("$")
-        if len(parts) != 4:
-            return False
-
-        algorithm, iterations_str, salt, stored_hash = parts
-        if algorithm != "pbkdf2_sha256":
-            return False
-
-        iterations = int(iterations_str)
-        password_bytes = plain_password.encode("utf-8")
-        salt_bytes = salt.encode("utf-8")
-
-        computed = hashlib.pbkdf2_hmac(
-            _HASH_ALGORITHM,
-            password_bytes,
-            salt_bytes,
-            iterations,
-            dklen=32
-        )
-
-        return computed.hex() == stored_hash
-    except Exception:
+        return _pwd_hasher.verify(hashed, password)
+    except (VerifyMismatchError, InvalidHashError):
         return False
 
 
-def _base64url_encode(data: bytes) -> str:
-    """Base64 URL 安全编码"""
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+# ============================================================
+#  Token 黑名单 (Redis SET + EXPIRE, 内存降级)
+# ============================================================
+#  Redis key: blacklist:{sha256(token)}
+#  Value: "1"
+#  TTL: 与 Token 剩余有效期一致 (自动过期, 不占内存)
+# ============================================================
+
+# 内存降级黑名单 (Redis 不可用时使用)
+_blacklist: Set[str] = set()
+
+# Redis key 前缀
+_BLACKLIST_PREFIX = "blacklist:"
 
 
-def _base64url_decode(data: str) -> bytes:
-    """Base64 URL 安全解码"""
-    padding = "=" * (4 - len(data) % 4)
-    return base64.urlsafe_b64decode(data + padding)
+def _token_hash(token: str) -> str:
+    """对 Token 做 SHA-256 摘要 (作为 Redis key, 不存明文)"""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def create_jwt_token(payload: Dict[str, Any], secret: Optional[str] = None,
-                     algorithm: str = "HS256",
-                     expire_minutes: Optional[int] = None) -> str:
-    """创建 JWT Token
+def revoke_token(token: str, ttl: Optional[int] = None) -> None:
+    """将 Token 加入黑名单
 
-    手写实现（不依赖 PyJWT），保证 Python 3.7 兼容性
+    Args:
+        token: JWT Token 字符串
+        ttl: 黑名单保留秒数 (默认 = Access Token 有效期 900s)
     """
-    if secret is None:
-        secret = settings.SECRET_KEY
+    token_h = _token_hash(token)
+    if ttl is None:
+        ttl = settings.JWT_ACCESS_EXPIRE_MINUTES * 60
 
-    if expire_minutes is None:
-        expire_minutes = settings.JWT_EXPIRE_MINUTES
+    # 尝试写入 Redis
+    from app.core.redis import get_redis_client, is_redis_available
+    if is_redis_available():
+        redis = get_redis_client()
+        if redis is not None:
+            # 使用 asyncio.create_task 异步写入, 不阻塞当前请求
+            # 如果在事件循环中, 用 ensure_future
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(
+                    redis.set(_BLACKLIST_PREFIX + token_h, "1", ex=ttl)
+                )
+            except RuntimeError:
+                # 不在事件循环中 (同步调用), 用同步 Redis 客户端降级
+                _blacklist.add(token_h)
+        else:
+            _blacklist.add(token_h)
+    else:
+        _blacklist.add(token_h)
 
+
+async def revoke_token_async(token: str, ttl: Optional[int] = None) -> None:
+    """异步将 Token 加入黑名单 (推荐在 async 路由中使用)"""
+    token_h = _token_hash(token)
+    if ttl is None:
+        ttl = settings.JWT_ACCESS_EXPIRE_MINUTES * 60
+
+    _blacklist.add(token_h)
+
+    from app.core.redis import get_redis_client, is_redis_available
+    if is_redis_available():
+        redis = get_redis_client()
+        if redis is not None:
+            try:
+                await redis.set(_BLACKLIST_PREFIX + token_h, "1", ex=ttl)
+            except Exception:
+                pass
+
+
+def is_token_revoked(token: str) -> bool:
+    """检查 Token 是否在黑名单中 (同步, 可能存在 Redis 延迟)"""
+    token_h = _token_hash(token)
+
+    # 先检查内存 (覆盖 Redis 不可用 + 刚撤销尚未同步的情况)
+    if token_h in _blacklist:
+        return True
+
+    # Redis 检查需要异步, 这里返回 False, 由异步路径 (extract_user_from_token_async) 精确检查
+    return False
+
+
+async def is_token_revoked_async(token: str) -> bool:
+    """异步检查 Token 是否在黑名单中 (精确, 推荐)"""
+    token_h = _token_hash(token)
+
+    # 先检查内存
+    if token_h in _blacklist:
+        return True
+
+    # 再检查 Redis
+    from app.core.redis import get_redis_client, is_redis_available
+    if is_redis_available():
+        redis = get_redis_client()
+        if redis is not None:
+            try:
+                exists = await redis.exists(_BLACKLIST_PREFIX + token_h)
+                if exists:
+                    _blacklist.add(token_h)
+                    return True
+            except Exception:
+                pass
+
+    return False
+
+
+# ============================================================
+#  Access Token (短时, 15min)
+# ============================================================
+
+def create_access_token(user_id: int, username: str, roles: Optional[list] = None) -> str:
+    """创建 Access Token — 15 分钟有效期"""
     now = int(time.time())
-    header = {"typ": "JWT", "alg": algorithm}
-
-    payload = dict(payload)
-    payload["iat"] = now
-    payload["exp"] = now + expire_minutes * 60
-
-    header_b64 = _base64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
-    payload_b64 = _base64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-
-    signing_input = (header_b64 + "." + payload_b64).encode("utf-8")
-    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
-    signature_b64 = _base64url_encode(signature)
-
-    return header_b64 + "." + payload_b64 + "." + signature_b64
-
-
-def decode_jwt_token(token: str, secret: Optional[str] = None,
-                     algorithms: Optional[list] = None) -> Optional[Dict[str, Any]]:
-    """验证并解码 JWT Token
-
-    失败返回 None
-    """
-    if secret is None:
-        secret = settings.SECRET_KEY
-    if algorithms is None:
-        algorithms = ["HS256"]
-
-    try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return None
-
-        header_b64, payload_b64, signature_b64 = parts
-
-        signing_input = (header_b64 + "." + payload_b64).encode("utf-8")
-        expected_signature = hmac.new(
-            secret.encode("utf-8"), signing_input, hashlib.sha256
-        ).digest()
-        provided_signature = _base64url_decode(signature_b64)
-
-        if not hmac.compare_digest(expected_signature, provided_signature):
-            return None
-
-        payload = json.loads(_base64url_decode(payload_b64).decode("utf-8"))
-
-        now = int(time.time())
-        if "exp" in payload and payload["exp"] < now:
-            return None
-
-        return payload
-    except Exception:
-        return None
-
-
-def create_access_token(user_id: int, username: str) -> str:
-    """为用户创建访问令牌"""
     payload = {
         "sub": str(user_id),
         "username": username,
-        "type": "access"
+        "roles": roles or [],
+        "type": "access",
+        "iat": now,
+        "exp": now + 900,  # 15 分钟
+        "jti": uuid.uuid4().hex,
     }
-    return create_jwt_token(payload)
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_access_token(token: str, secret: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """验证并解析 access token（校验签名 + exp）"""
-    return decode_jwt_token(token, secret=secret)
+# ============================================================
+#  Refresh Token (长时, 7d)
+# ============================================================
+
+def create_refresh_token(user_id: int) -> str:
+    """创建 Refresh Token — 7 天有效期"""
+    now = int(time.time())
+    payload = {
+        "sub": str(user_id),
+        "type": "refresh",
+        "iat": now,
+        "exp": now + 604800,  # 7 天
+        "jti": uuid.uuid4().hex,
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def hash_token(token: str) -> str:
+    """对 Token 做 SHA-256 摘要 (存数据库用, 不存明文)"""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+# ============================================================
+#  Token 校验
+# ============================================================
+
+def decode_token(token: str) -> Optional[Dict[str, Any]]:
+    """解码 JWT Token, 返回 payload 或 None"""
+    try:
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+        )
+        return payload
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
 
 
 def extract_user_from_token(token: str) -> Optional[Dict[str, Any]]:
-    """从 Token 中提取用户信息"""
-    payload = decode_jwt_token(token)
+    """从 Access Token 提取用户信息 (同步, 仅检查内存黑名单)"""
+    if is_token_revoked(token):
+        return None
+
+    payload = decode_token(token)
     if payload is None:
         return None
+
+    if payload.get("type") != "access":
+        return None
+
     try:
         return {
             "user_id": int(payload["sub"]),
             "username": payload.get("username", ""),
+            "roles": payload.get("roles", []),
+            "jti": payload.get("jti", ""),
         }
-    except (KeyError, ValueError, TypeError):
+    except (KeyError, ValueError):
         return None
+
+
+async def extract_user_from_token_async(token: str) -> Optional[Dict[str, Any]]:
+    """从 Access Token 提取用户信息 (异步, 精确检查 Redis 黑名单)
+
+    推荐在 FastAPI 依赖注入中使用此函数.
+    """
+    if await is_token_revoked_async(token):
+        return None
+
+    payload = decode_token(token)
+    if payload is None:
+        return None
+
+    if payload.get("type") != "access":
+        return None
+
+    try:
+        return {
+            "user_id": int(payload["sub"]),
+            "username": payload.get("username", ""),
+            "roles": payload.get("roles", []),
+            "jti": payload.get("jti", ""),
+        }
+    except (KeyError, ValueError):
+        return None
+
+
+def extract_user_from_refresh_token(token: str) -> Optional[Dict[str, Any]]:
+    """从 Refresh Token 提取用户信息 (同步, 仅检查内存黑名单)"""
+    if is_token_revoked(token):
+        return None
+
+    payload = decode_token(token)
+    if payload is None:
+        return None
+
+    if payload.get("type") != "refresh":
+        return None
+
+    try:
+        return {
+            "user_id": int(payload["sub"]),
+            "jti": payload.get("jti", ""),
+            "exp": payload.get("exp", 0),
+        }
+    except (KeyError, ValueError):
+        return None
+
+
+async def extract_user_from_refresh_token_async(token: str) -> Optional[Dict[str, Any]]:
+    """从 Refresh Token 提取用户信息 (异步, 精确检查 Redis 黑名单)"""
+    if await is_token_revoked_async(token):
+        return None
+
+    payload = decode_token(token)
+    if payload is None:
+        return None
+
+    if payload.get("type") != "refresh":
+        return None
+
+    try:
+        return {
+            "user_id": int(payload["sub"]),
+            "jti": payload.get("jti", ""),
+            "exp": payload.get("exp", 0),
+        }
+    except (KeyError, ValueError):
+        return None
+
+
+# ============================================================
+#  兼容: 旧版 create_token (Phase 1 测试用)
+# ============================================================
+
+def create_token(user_id: int, username: str) -> str:
+    """旧版兼容接口 — 等同于 create_access_token"""
+    return create_access_token(user_id, username)
