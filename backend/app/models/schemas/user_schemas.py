@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, EmailStr, validator
+from pydantic import BaseModel, Field, EmailStr, field_validator, ConfigDict
 
 from app.models.response import ApiResponse
 
@@ -15,9 +15,10 @@ class UserRegister(BaseModel):
     password: str = Field(..., min_length=6, max_length=128, description="密码 (6-128 字符)")
     confirm_password: str = Field(..., description="确认密码")
 
-    @validator("confirm_password")
-    def passwords_match(cls, v, values):
-        if "password" in values and v != values["password"]:
+    @field_validator("confirm_password")
+    @classmethod
+    def passwords_match(cls, v, info):
+        if "password" in info.data and v != info.data["password"]:
             raise ValueError("两次输入的密码不一致")
         return v
 
@@ -38,9 +39,7 @@ class UserInfo(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TokenData(BaseModel):

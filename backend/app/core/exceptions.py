@@ -65,7 +65,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
                 code=exc.code,
                 message=exc.message,
                 details=exc.details
-            ).dict()
+            ).model_dump()
         )
 
     logger.exception("Unhandled exception: %s", str(exc))

@@ -4,7 +4,10 @@ import os
 from typing import List, Optional
 from pathlib import Path
 
-from pydantic import BaseSettings
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:
+    from pydantic import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -89,6 +92,13 @@ class Settings(BaseSettings):
 
     # ===== CORS =====
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+
+    # ===== OAuth2 三方登录 (Phase 5) =====
+    OAUTH_GITHUB_CLIENT_ID: str = ""
+    OAUTH_GITHUB_CLIENT_SECRET: str = ""
+    OAUTH_GOOGLE_CLIENT_ID: str = ""
+    OAUTH_GOOGLE_CLIENT_SECRET: str = ""
+    OAUTH_REDIRECT_BASE: str = "http://localhost:8000/api/v1/oauth"
 
     class Config:
         env_file = ".env"

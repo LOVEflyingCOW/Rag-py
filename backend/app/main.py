@@ -40,10 +40,17 @@ def create_app() -> FastAPI:
         RateLimitMiddleware,
         AuditLogMiddleware,
         SecurityHeadersMiddleware,
+        IdempotencyMiddleware,
+        TracingMiddleware,
+        MetricsMiddleware,
     )
+    # 注册顺序 (后注册先执行): Tracing → Metrics → Security → Idempotency → RateLimit → Audit
     app.add_middleware(AuditLogMiddleware)
     app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(MetricsMiddleware)
+    app.add_middleware(TracingMiddleware)
 
     app.add_exception_handler(Exception, global_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)

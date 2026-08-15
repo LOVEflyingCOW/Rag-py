@@ -20,7 +20,11 @@ from typing import Optional, Dict, Any, Set
 
 import jwt
 from argon2 import PasswordHasher, Type
-from argon2.exceptions import VerifyMismatchError, InvalidHashError
+from argon2.exceptions import VerifyMismatchError
+try:
+    from argon2.exceptions import InvalidHashError
+except ImportError:
+    from argon2.exceptions import InvalidHash as InvalidHashError
 
 from app.core.config import settings
 

@@ -1,0 +1,23 @@
+# .dockerignore — 排除不需要的文件, 减小构建上下文
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+data/
+docs/
+tests/
+*.md
+*.log
+.env
+.env.local
+test_*.py
+*_test.py
+debug_*.py

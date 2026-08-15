@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # ============ User / Auth ============
@@ -27,8 +27,7 @@ class UserInfo(BaseModel):
     is_admin: bool = False
     created_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TokenData(BaseModel):
     access_token: str
@@ -92,8 +91,7 @@ class KnowledgeBaseInfo(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class KnowledgeBaseListResponse(BaseModel):
     items: List[KnowledgeBaseInfo] = []
@@ -115,8 +113,7 @@ class DocumentInfo(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DocumentListResponse(BaseModel):
     items: List[DocumentInfo] = []
@@ -135,8 +132,7 @@ class ChunkInfo(BaseModel):
     chunk_index: int = 0
     vector_index: int = -1
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SearchResponse(BaseModel):
     query: str
