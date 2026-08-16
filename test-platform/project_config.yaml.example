@@ -1,0 +1,78 @@
+# ============================================================
+#  Test Platform · 项目配置示例（通用化脚手架）
+# ------------------------------------------------------------
+#  新项目接入 SOP:
+#    1. 复制本文件 → 改名 project_config.yaml (去掉 .example)
+#    2. 修改下方 "项目相关" 小节（路径 / 模块名 / 依赖注入 key）
+#    3. 若某个默认插件不满足（例如项目用 MySQL 而非 SQLite）:
+#         - 新建 conftest_plugins/<xxx>_plugin_<name>.py
+#         - 实现 def register_fixtures(registry) -> None
+#         - 把下方 plugins.db_plugin 之类的指向改到新模块的 import 路径
+#         - 完事，其余 scripts/templates/docs 全通用
+# ============================================================
+
+# -------------------- 项目相关（每个项目必改） --------------------
+project:
+  name: "rag-py"                   # 仅用于显示/报告命名
+  backend_root: "backend"          # 相对于仓库根的后端代码目录（放 app / main 的那层）
+  app_module: "app"                # python import 名（import <app_module>.main）
+  main_app_attr: "app"             # <app_module>.main:<这个> 是 FastAPI 实例
+
+  # 依赖注入: FastAPI 里获取 DB session 的 Depends key
+  # 形如: app.api.dependencies:get_db_dep  (模块路径:属性名)
+  get_db_dep_path: "app.api.dependencies:get_db_dep"
+
+  # 实体所在模块（用于 Base.metadata.create_all）
+  entities_module: "app.models.entities"
+  base_metadata_path: "app.models.database:Base"  # Base.metadata 在哪
+
+  # 安全模块：哈希密码 / 双 token 生成函数
+  security_module: "app.core.security"
+  fn_hash_password: "hash_password"
+  fn_create_access_token: "create_access_token"
+  fn_create_refresh_token: "create_refresh_token"
+
+  # 用户模型 + 字段映射（给 auth_plugin 默认实现用）
+  user_model_path: "app.models.entities:User"
+  user_fields:
+    username: "username"
+    email: "email"
+    password_hash: "password_hash"
+    is_active: "is_active"
+    is_admin: "is_admin"
+  user_default_password: "Test123456"  # 测试用户固定密码
+
+  # 知识库/文档模型（给 data_plugin 默认实现用），不需要的项目留空
+  kb_model_path: "app.models.entities:KnowledgeBase"
+  document_model_path: "app.models.entities:Document"
+
+  # 任务模块（celery audit），不需要留空
+  audit_tasks_module: "app.tasks.audit_tasks"
+  audit_task_name: "write_audit_log"
+
+  # 配置对象（settings）
+  settings_path: "app.core.config:settings"
+
+
+# -------------------- 插件映射（99% 项目默认就行） --------------------
+# 格式：<key> = "<import.path.to.module>"
+# 每个模块必须实现:  def register_fixtures(registry: FixtureRegistry) -> None
+plugins:
+  db_plugin:         "conftest_plugins.db_plugin_default"
+  redis_plugin:      "conftest_plugins.redis_plugin_default"
+  auth_plugin:       "conftest_plugins.auth_plugin_default"
+  data_plugin:       "conftest_plugins.data_plugin_default"
+  api_client_plugin: "conftest_plugins.api_client_plugin_default"
+
+
+# -------------------- pytest / 工具链默认参数（scripts 读取） --------------------
+pytest:
+  paths:
+    - "tests/unit"
+    - "tests/integration"
+    - "tests/api"
+    - "tests/phases"
+  exclude_marks: ["load", "slow"]
+  report_dir: "reports"
+  htmlcov_dir: "htmlcov"
+  maxfail: 5

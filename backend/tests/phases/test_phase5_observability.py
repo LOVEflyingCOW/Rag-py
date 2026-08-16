@@ -11,7 +11,33 @@
 import pytest
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+
+# Py3.7 兼容: AsyncMock 在 Py3.8+ 才内置
+try:
+    from unittest.mock import AsyncMock
+except ImportError:  # pragma: no cover - Py3.7 fallback
+    class AsyncMock:  # type: ignore
+        """最小化 AsyncMock shim (Py3.7)"""
+        def __init__(self, *args, **kwargs):
+            from unittest.mock import MagicMock
+            self._mock = MagicMock(*args, **kwargs)
+
+        async def __call__(self, *args, **kwargs):
+            return self._mock(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._mock, name)
+
+        def assert_called_once(self, *a, **kw):
+            return self._mock.assert_called_once(*a, **kw)
+
+        def assert_called(self, *a, **kw):
+            return self._mock.assert_called(*a, **kw)
+
+        def assert_not_called(self, *a, **kw):
+            return self._mock.assert_not_called(*a, **kw)
+
+from unittest.mock import MagicMock, patch
 
 
 # ============================================================

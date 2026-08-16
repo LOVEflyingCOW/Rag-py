@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, ConfigDict
+# Pydantic v1/v2 兼容: 项目固定 Pydantic v1.10+
+from pydantic import BaseModel, Field
+try:
+    from pydantic import ConfigDict  # v2+
+except ImportError:  # pragma: no cover - v1 fallback
+    def ConfigDict(**kwargs):  # type: ignore
+        return kwargs
 
 
 class KnowledgeBaseCreate(BaseModel):
@@ -42,6 +48,9 @@ class KnowledgeBaseInfo(BaseModel):
     total_chunks: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
 
     model_config = ConfigDict(from_attributes=True)
 

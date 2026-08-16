@@ -5,7 +5,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_db_dep, get_current_user, get_current_user_optional, CurrentUser
+from app.api.dependencies import (
+    get_db_dep,
+    get_current_user,
+    get_current_user_optional,
+    CurrentUser,
+    require_permission,
+)
 from app.models.schemas import (
     KnowledgeBaseCreate,
     KnowledgeBaseUpdate,
@@ -22,10 +28,10 @@ router = APIRouter(prefix="/knowledge-bases", tags=["知识库"])
 @router.post("", response_model=ApiResponse[KnowledgeBaseInfo])
 async def create_kb(
     payload: KnowledgeBaseCreate,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_permission("kb", "create")),
     db: AsyncSession = Depends(get_db_dep),
 ):
-    """创建知识库（需要登录）"""
+    """创建知识库（需要登录 + kb:create 权限）"""
     service = KnowledgeBaseService(db)
     kb = await service.create(payload, user_id=current_user.user_id)
     return ApiResponse[KnowledgeBaseInfo](data=KnowledgeBaseInfo.from_orm(kb))
@@ -81,10 +87,10 @@ async def get_kb(
 async def update_kb(
     kb_id: int,
     payload: KnowledgeBaseUpdate,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_permission("kb", "update")),
     db: AsyncSession = Depends(get_db_dep),
 ):
-    """更新知识库（仅限所有者）"""
+    """更新知识库（需要 kb:update 权限；仅限所有者 — Service 层再校验）"""
     service = KnowledgeBaseService(db)
     kb = await service.update(kb_id, payload, user_id=current_user.user_id)
 
@@ -100,10 +106,10 @@ async def update_kb(
 @router.delete("/{kb_id}", response_model=ApiResponse[dict])
 async def delete_kb(
     kb_id: int,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_permission("kb", "delete")),
     db: AsyncSession = Depends(get_db_dep),
 ):
-    """删除知识库（仅限所有者）"""
+    """删除知识库（需要 kb:delete 权限；仅限所有者 — Service 层再校验）"""
     service = KnowledgeBaseService(db)
     success = await service.delete(kb_id, user_id=current_user.user_id)
 

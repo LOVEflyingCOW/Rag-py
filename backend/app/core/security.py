@@ -75,35 +75,46 @@ def _token_hash(token: str) -> str:
 
 
 def revoke_token(token: str, ttl: Optional[int] = None) -> None:
-    """将 Token 加入黑名单
+    """将 Token 加入黑名单（同步版）
+
+    ⚠️  硬约束（PHASE6 踩坑教训）：黑名单必须先写内存 dict，保证「撤销后下一毫秒立刻生效」；
+        Redis 只是异步同步副本，任何异常都不能影响内存黑名单的立即可用性。
 
     Args:
         token: JWT Token 字符串
         ttl: 黑名单保留秒数 (默认 = Access Token 有效期 900s)
     """
+    import warnings
+
     token_h = _token_hash(token)
     if ttl is None:
         ttl = settings.JWT_ACCESS_EXPIRE_MINUTES * 60
 
-    # 尝试写入 Redis
+    # 1) 无条件先写内存（立即可用，不依赖任何中间件）
+    _blacklist.add(token_h)
+
+    # 2) 尽力写 Redis（异步调度 / 同步降级均可），失败只打 warning，不影响结果
     from app.core.redis import get_redis_client, is_redis_available
     if is_redis_available():
         redis = get_redis_client()
         if redis is not None:
-            # 使用 asyncio.create_task 异步写入, 不阻塞当前请求
-            # 如果在事件循环中, 用 ensure_future
             try:
                 loop = asyncio.get_event_loop()
-                loop.create_task(
-                    redis.set(_BLACKLIST_PREFIX + token_h, "1", ex=ttl)
+                if loop.is_running():
+                    loop.create_task(redis.set(_BLACKLIST_PREFIX + token_h, "1", ex=ttl))
+                else:
+                    # 有 loop 但没跑（例如 alembic 脚本），同步等 set 完成
+                    loop.run_until_complete(redis.set(_BLACKLIST_PREFIX + token_h, "1", ex=ttl))
+            except RuntimeError as e:
+                warnings.warn(
+                    f"[revoke_token] 无法同步 Redis 黑名单 (内存已写入): {e}",
+                    stacklevel=2,
                 )
-            except RuntimeError:
-                # 不在事件循环中 (同步调用), 用同步 Redis 客户端降级
-                _blacklist.add(token_h)
-        else:
-            _blacklist.add(token_h)
-    else:
-        _blacklist.add(token_h)
+            except Exception as e:  # noqa: BLE001 - Redis 出错只警告
+                warnings.warn(
+                    f"[revoke_token] Redis.set 异常 (内存已写入): {type(e).__name__}: {e}",
+                    stacklevel=2,
+                )
 
 
 async def revoke_token_async(token: str, ttl: Optional[int] = None) -> None:

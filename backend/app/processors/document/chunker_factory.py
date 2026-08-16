@@ -20,7 +20,13 @@
 from __future__ import annotations
 
 import re
-from typing import List, Dict, Any, Optional, Protocol
+from typing import List, Dict, Any, Optional
+
+# Protocol: Python 3.8+ 内置 typing.Protocol，Py3.7 走 typing_extensions 兼容
+try:
+    from typing import Protocol
+except ImportError:  # pragma: no cover - Py3.7 环境
+    from typing_extensions import Protocol  # type: ignore
 
 from app.core.logging import logger
 from .semantic_chunker import SemanticChunker

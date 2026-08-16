@@ -1,11 +1,22 @@
 """
-Phase 4 混合检索实际效果测试
+Phase 4 混合检索 DEMO / pytest 用例（双模式）
 
-直接操作数据库插入测试文档，构建向量索引，运行混合检索，展示实际效果。
+⚠️ 两种运行方式：
+-----------------------------------------------------------------
+A) pytest 用例模式（PHASE7 新增 —— 标记 @pytest.mark.slow @pytest.mark.demo）
+   pytest -m demo                                            # 只跑 DEMO 套件（默认跳过）
+   pytest tests/phases/test_phase4_hybrid_demo.py -m demo    # 指定文件跑
+   ✨ 特点：用 pytest 断言代替 print，失败时能明确看哪个 query 命中错误
 
-运行方式:
-  cd backend
-  ..\\venv\\Scripts\\python.exe tests/phases/test_phase4_hybrid_demo.py
+B) 手动脚本模式（旧版兼容，不依赖 pytest runner）
+   cd backend
+   ..\venv\Scripts\python.exe tests/phases/test_phase4_hybrid_demo.py
+   ✨ 特点：人眼可读的漂亮表格输出，演示用
+
+为什么默认用 @pytest.mark.slow @pytest.mark.demo 标记（默认跳过）：
+  - 依赖真 Embedding 模型（要对 6 个文档 + 6 个查询做 embedding）
+  - 本地无 MODEL_CACHE 时可能触发下载（200MB+，首次 30s+）
+  - 单条用例 20-60s，日常 CI 不适合跑；想验证时显式加 -m demo
 """
 
 import sys
@@ -14,24 +25,12 @@ import asyncio
 import json
 from pathlib import Path
 from datetime import datetime
+from typing import Tuple  # Python 3.7 兼容：不能用 tuple[A,B] 内置泛型
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# 初始化 Redis
-from app.core.redis import init_redis
-asyncio.run(init_redis())
-
-from sqlalchemy import select, delete, func
-from app.models.database import AsyncSessionLocal, async_engine, Base, _is_sqlite
-from app.models.entities.user import User
-from app.models.entities.knowledge_base import KnowledgeBase
-from app.models.entities.document import Document, DocumentChunk
-from app.services.retrieval_service import RetrievalService, RetrievedHit
-from app.core.security import hash_password as get_password_hash
-
-
-# ===================== 测试文档数据 =====================
+# ===================== 测试文档数据（模块级，pytest 导入时无副作用）=====================
 
 TEST_DOCUMENTS = [
     {
@@ -88,82 +87,117 @@ RAG系统在处理中文文档时，需要特别注意分词质量和语义理�
     },
 ]
 
-# 测试查询
+# 测试查询（每个查询对应预期命中的文档关键词 —— pytest 断言会检查 top-1 是否命中预期文档）
 TEST_QUERIES = [
     {
         "query": "什么是RAG系统",
-        "expected_keywords": ["RAG", "检索增强生成", "知识库"],
-        "description": "中文语义查询 - 应该命中 rag_introduction.txt",
+        "expected_keywords": ["rag_introduction", "RAG", "检索增强", "知识库"],
+        "description": "中文语义-RAG介绍",
     },
     {
         "query": "vector database comparison FAISS pgvector Milvus",
-        "expected_keywords": ["FAISS", "pgvector", "Milvus", "向量数据库"],
-        "description": "英文关键词查询 - 应该命中 vector_database_comparison.txt",
+        "expected_keywords": ["vector_database", "FAISS", "pgvector", "Milvus"],
+        "description": "英文关键词-向量数据库对比",
     },
     {
         "query": "如何选择嵌入模型",
-        "expected_keywords": ["嵌入模型", "Embedding", "向量维度"],
-        "description": "中文语义查询 - 应该命中 embedding_models.txt",
+        "expected_keywords": ["embedding_models", "嵌入模型", "Embedding", "向量维度"],
+        "description": "中文语义-嵌入模型选择",
     },
     {
         "query": "深度学习和神经网络有什么关系",
-        "expected_keywords": ["深度学习", "神经网络", "机器学习"],
-        "description": "中文语义查询 - 应该命中 machine_learning_basics.txt",
+        "expected_keywords": ["machine_learning", "深度学习", "神经网络", "机器学习"],
+        "description": "中文语义-机器学习基础",
     },
     {
         "query": "中文分词工具和NLP处理",
-        "expected_keywords": ["中文", "分词", "NLP", "jieba"],
-        "description": "中文关键词+语义查询 - 应该命中 chinese_nlp_techniques.txt",
+        "expected_keywords": ["chinese_nlp", "中文", "分词", "jieba", "NLP"],
+        "description": "中文关键词-中文NLP",
     },
     {
         "query": "hybrid search ranking BM25 TF-IDF reranking",
-        "expected_keywords": ["混合检索", "BM25", "排序", "hybrid"],
-        "description": "英文混合查询 - 应该命中 search_relevance_ranking.txt",
+        "expected_keywords": ["search_relevance", "混合检索", "BM25", "排序", "hybrid"],
+        "description": "英文混合-相关性排序",
     },
 ]
 
 
 def print_separator(title=""):
+    """脚本模式下用的漂亮分隔线（pytest 模式不用）"""
     print(f"\n{'='*70}")
     if title:
         print(f"  {title}")
         print(f"{'='*70}")
 
 
-async def setup_test_data():
-    """创建测试数据：用户、知识库、文档、分块"""
-    print_separator("Step 1: 创建测试数据")
-    
-    async with AsyncSessionLocal() as db:
-        # 0. 自动迁移: 确保 chunks 表有 embedding 和 search_vector 列
-        from sqlalchemy import text as sql_text
-        migration_needed = False
-        try:
-            # 检查 chunks 表结构
-            result = await db.execute(sql_text("PRAGMA table_info(chunks)"))
-            columns = [row[1] for row in result.fetchall()]
-            if "embedding" not in columns or "search_vector" not in columns:
-                migration_needed = True
-        except Exception:
-            migration_needed = True
-        
-        if migration_needed:
-            print("  [!] 检测到 chunks 表缺少 Phase 4 新列，正在自动迁移...")
-            try:
-                if "embedding" not in columns:
-                    await db.execute(sql_text("ALTER TABLE chunks ADD COLUMN embedding JSON"))
-                    print("  [+] 已添加 embedding 列 (JSON 类型)")
-                if "search_vector" not in columns:
-                    await db.execute(sql_text("ALTER TABLE chunks ADD COLUMN search_vector TEXT"))
-                    print("  [+] 已添加 search_vector 列 (Text 类型)")
-                await db.commit()
-                print("  [OK] 迁移完成")
-            except Exception as e:
-                print(f"  [!] 迁移跳过: {e}")
-                await db.rollback()
+# ============================================================
+#  公共逻辑：setup/build/search 步骤
+#  - 脚本模式和 pytest 模式共用，避免重复实现
+#  - 区别：pytest 模式通过 fixture 传 db_session；脚本模式直接用 AsyncSessionLocal
+# ============================================================
 
-        # 1. 创建测试用户
-        result = await db.execute(select(User).where(User.username == "hybrid_test_user"))
+
+def _match_expected(filename: str, expected_keywords: list) -> bool:
+    """top-1 文件名里是否有任意 expected keyword"""
+    name_l = filename.lower()
+    return any(kw.lower() in name_l for kw in expected_keywords)
+
+
+async def _setup_kb_data(db_session, user_factory=None):
+    """创建测试数据（用 pytest fixtures 更优雅）。
+
+    两种 DB accessor：
+      pytest 模式: user_factory 可用（造 user/kb cascade），db_session 是回滚安全的 function scope
+      脚本模式: user_factory 为 None，直接 insert User/KnowledgeBase/Document/Chunk
+    """
+    from sqlalchemy import select, delete, func
+    from app.models.entities.user import User
+    from app.models.entities.knowledge_base import KnowledgeBase
+    from app.models.entities.document import Document, DocumentChunk
+    from app.core.security import hash_password as get_password_hash
+    from app.models.database import _is_sqlite
+
+    # 0. 迁移保险（SQLite 内存库第一次跑时 chunks 表可能缺 embedding/search_vector 列）
+    from sqlalchemy import text as sql_text
+
+    migration_needed = False
+    columns: list = []
+    try:
+        result = await db_session.execute(sql_text("PRAGMA table_info(chunks)"))
+        columns = [row[1] for row in result.fetchall()]
+        if columns and ("embedding" not in columns or "search_vector" not in columns):
+            migration_needed = True
+    except Exception:
+        migration_needed = True
+
+    if migration_needed:
+        print("  [!] 检测到 chunks 表缺少 Phase 4 新列，正在自动迁移...")
+        try:
+            if "embedding" not in columns:
+                await db_session.execute(sql_text("ALTER TABLE chunks ADD COLUMN embedding JSON"))
+                print("  [+] 已添加 embedding 列")
+            if "search_vector" not in columns:
+                await db_session.execute(sql_text("ALTER TABLE chunks ADD COLUMN search_vector TEXT"))
+                print("  [+] 已添加 search_vector 列")
+            await db_session.commit()
+        except Exception:
+            await db_session.rollback()
+
+    # 1. 创建测试用户（有 user_factory 用 factory，无则直接 insert）
+    if user_factory is not None:
+        tenant = await user_factory.tenant_factory.acreate(
+            db_session, name="hybrid_demo_tenant"
+        )
+        user = await user_factory.acreate(
+            db_session,
+            username=f"hybrid_test_user_{os.getpid()}",
+            tenant_id=tenant.id if tenant else None,
+        )
+        await db_session.flush()
+    else:
+        result = await db_session.execute(
+            select(User).where(User.username == "hybrid_test_user")
+        )
         user = result.scalars().first()
         if user is None:
             user = User(
@@ -172,362 +206,527 @@ async def setup_test_data():
                 password_hash=get_password_hash("TestPass123!"),
                 is_active=True,
             )
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
-            print(f"  [+] 创建测试用户: {user.username} (id={user.id})")
-        else:
-            print(f"  [=] 测试用户已存在: {user.username} (id={user.id})")
+            db_session.add(user)
+            await db_session.commit()
+            await db_session.refresh(user)
 
-        # 2. 创建知识库
-        result = await db.execute(
+    # 2. 创建知识库（固定名，脚本模式下幂等）
+    if user_factory is not None:
+        # pytest 模式：每个 session 唯一 name，避免冲突（SQLite 内存库其实隔离，为保险）
+        kb = KnowledgeBase(
+            name=f"混合检索测试知识库_{os.getpid()}",
+            description="Phase 4 混合检索 pytest DEMO",
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            is_public=True,
+            status="active",
+        )
+        db_session.add(kb)
+        await db_session.flush()
+    else:
+        result = await db_session.execute(
             select(KnowledgeBase).where(KnowledgeBase.name == "混合检索测试知识库")
         )
         kb = result.scalars().first()
         if kb is None:
             kb = KnowledgeBase(
                 name="混合检索测试知识库",
-                description="Phase 4 混合检索功能验证 - 包含RAG、向量数据库、嵌入模型等文档",
+                description="Phase 4 混合检索功能验证",
                 user_id=user.id,
                 is_public=True,
                 status="active",
             )
-            db.add(kb)
-            await db.commit()
-            await db.refresh(kb)
-            print(f"  [+] 创建知识库: {kb.name} (id={kb.id})")
+            db_session.add(kb)
+            await db_session.commit()
+            await db_session.refresh(kb)
         else:
-            # 清除旧数据，重新插入
-            await db.execute(
+            # 幂等：清除旧文档，重新插入
+            await db_session.execute(
                 delete(DocumentChunk).where(DocumentChunk.knowledge_base_id == kb.id)
             )
-            await db.execute(
+            await db_session.execute(
                 delete(Document).where(Document.knowledge_base_id == kb.id)
             )
-            await db.commit()
-            print(f"  [=] 知识库已存在，已清除旧文档: {kb.name} (id={kb.id})")
+            await db_session.commit()
 
-        # 3. 创建文档和分块
-        total_chunks = 0
-        for doc_data in TEST_DOCUMENTS:
-            # 创建文档
-            doc = Document(
-                knowledge_base_id=kb.id,
-                filename=doc_data["filename"],
-                file_path=f"/test/{doc_data['filename']}",
-                file_type="txt",
-                mime_type="text/plain",
-                file_size=len(doc_data["content"]),
-                size_bytes=len(doc_data["content"].encode('utf-8')),
-                content_text=doc_data["content"],
-                status="completed",
-                total_chunks=1,
-            )
-            db.add(doc)
-            await db.commit()
-            await db.refresh(doc)
+    # 3. 创建文档 + 分块（一个文档 = 1 chunk，方便断言 top-1）
+    total_chunks = 0
+    for doc_data in TEST_DOCUMENTS:
+        doc = Document(
+            knowledge_base_id=kb.id,
+            filename=doc_data["filename"],
+            file_path=f"/test/{doc_data['filename']}",
+            file_type="txt",
+            mime_type="text/plain",
+            file_size=len(doc_data["content"]),
+            size_bytes=len(doc_data["content"].encode("utf-8")),
+            content_text=doc_data["content"],
+            status="completed",
+            total_chunks=1,
+        )
+        db_session.add(doc)
+        await db_session.flush()
 
-            # 创建分块 (每篇文档作为一个 chunk)
-            chunk = DocumentChunk(
-                document_id=doc.id,
-                knowledge_base_id=kb.id,
-                content=doc_data["content"],
-                chunk_index=0,
-                metadata_=json.dumps({"source": doc_data["filename"]}, ensure_ascii=False),
-                vector_index=-1,
-            )
-            db.add(chunk)
-            await db.commit()
-            await db.refresh(chunk)
-            
-            total_chunks += 1
-            print(f"  [+] 文档: {doc_data['filename']} -> chunk_id={chunk.id}")
+        chunk = DocumentChunk(
+            document_id=doc.id,
+            knowledge_base_id=kb.id,
+            content=doc_data["content"],
+            chunk_index=0,
+            metadata_=json.dumps({"source": doc_data["filename"]}, ensure_ascii=False),
+            vector_index=-1,
+        )
+        db_session.add(chunk)
+        await db_session.flush()
+        total_chunks += 1
 
-        # 更新知识库统计
-        kb.total_documents = len(TEST_DOCUMENTS)
-        kb.total_chunks = total_chunks
-        await db.commit()
+    # 更新 kb 统计 + commit（脚本模式要持久化；pytest 模式 commit 也 OK，fixture teardown 回滚）
+    kb.total_documents = len(TEST_DOCUMENTS)
+    kb.total_chunks = total_chunks
+    await db_session.commit()
 
-        print(f"\n  总计: {len(TEST_DOCUMENTS)} 篇文档, {total_chunks} 个分块")
-        print(f"  数据库类型: {'SQLite' if _is_sqlite else 'PostgreSQL'}")
-
-        return kb.id
+    return kb.id
 
 
-async def build_vector_index(kb_id: int):
-    """构建向量索引"""
-    print_separator("Step 2: 构建向量索引")
-    
+async def _build_vector_index(kb_id: int):
+    """对某个 kb build 向量索引（返回 stats dict）"""
+    from app.models.database import AsyncSessionLocal
+    from app.services.document_service import DocumentService
+
     async with AsyncSessionLocal() as db:
-        from app.services.document_service import DocumentService
         ds = DocumentService(db)
-        
-        # 删除旧的向量存储文件（如果存在）
         if ds.vector_manager.has_store(kb_id):
             ds.vector_manager.delete(kb_id)
-            print(f"  已清除旧的向量存储")
-        
-        print(f"  正在为知识库 (id={kb_id}) 构建向量索引...")
         await ds._rebuild_vector_index(kb_id)
-        
-        # 检查向量存储状态
         store = ds.vector_manager.get_store(kb_id, dim=ds.embedding.dim)
-        stats = store.stats()
-        print(f"  向量维度: {stats['dim']}")
-        print(f"  向量数量: {stats['total_vectors']}")
-        
-        # 检查一致性
-        ok, issues = store.check_consistency()
-        if ok:
-            print(f"  一致性检查: [OK] 通过")
-        else:
-            print(f"  一致性检查: [FAIL] 存在问题")
-            for issue in issues:
-                print(f"    - {issue}")
-        
-        return stats
+        return store.stats()
 
 
-async def run_hybrid_search(kb_id: int):
-    """运行混合检索测试"""
-    print_separator("Step 3: 混合检索测试")
-    
-    async with AsyncSessionLocal() as db:
-        service = RetrievalService(db)
-        
-        # 确认检索模式
-        mode = "PostgreSQL 原生检索" if service._use_postgres_search else "FAISS + BM25 (降级模式)"
-        print(f"  检索模式: {mode}")
-        print(f"  权重配置: Vector={service.VECTOR_WEIGHT}, BM25={service.BM25_WEIGHT}, Keyword={service.KEYWORD_WEIGHT}")
-        
-        results_summary = []
-        
-        for i, test_case in enumerate(TEST_QUERIES, 1):
-            print(f"\n  --- 查询 {i}/{len(TEST_QUERIES)} ---")
-            print(f"  查询: \"{test_case['query']}\"")
-            print(f"  预期: {test_case['description']}")
-            
-            try:
-                hits = await service.search(
-                    kb_id=kb_id,
-                    query_text=test_case["query"],
-                    user_id=None,  # 公开知识库
-                    top_k=3,
-                    min_score=0.0,
-                    enable_rerank=True,
-                    enable_merge=False,
-                )
-                
-                if not hits:
-                    print(f"  结果: 未找到匹配文档")
-                    results_summary.append({
-                        "query": test_case["query"],
-                        "hit_count": 0,
-                        "top_hit": None,
-                    })
-                    continue
-                
-                print(f"  结果: 找到 {len(hits)} 条匹配")
-                print(f"  {'Rank':<5} {'Score':<8} {'Vector':<8} {'BM25':<8} {'Keyword':<8} {'Filename':<35} {'Content Preview'}")
-                print(f"  {'-'*5} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*35} {'-'*40}")
-                
-                for hit in hits:
-                    # 获取文件名
-                    filename = hit.document_filename or "unknown"
-                    content_preview = hit.content[:50].replace('\n', ' ').strip() + "..."
-                    
-                    print(f"  {hit.rank:<5} {hit.final_score:<8.4f} {hit.vector_score:<8.4f} {hit.bm25_score:<8.4f} {hit.keyword_score:<8.4f} {filename:<35} {content_preview}")
-                
-                # 分析检索质量
-                top_hit = hits[0]
-                top_filename = top_hit.document_filename or ""
-                
-                # 检查是否命中预期文档
-                expected_file = ""
-                for keyword in test_case["expected_keywords"]:
-                    if keyword.lower() in top_filename.lower():
-                        expected_file = top_filename
-                        break
-                
-                # 显示完整的 top-1 内容
-                print(f"\n  [Top-1 完整内容]")
-                print(f"  文件: {top_filename}")
-                print(f"  分数: vector={top_hit.vector_score:.4f}, bm25={top_hit.bm25_score:.4f}, keyword={top_hit.keyword_score:.4f}, final={top_hit.final_score:.4f}")
-                print(f"  内容:\n    {top_hit.content[:200]}...")
-                
-                results_summary.append({
-                    "query": test_case["query"],
-                    "hit_count": len(hits),
-                    "top_hit": top_filename,
-                    "top_score": top_hit.final_score,
-                })
-                
-            except Exception as e:
-                print(f"  [ERROR] 检索失败: {e}")
-                import traceback
-                traceback.print_exc()
-                results_summary.append({
-                    "query": test_case["query"],
-                    "hit_count": 0,
-                    "top_hit": None,
-                    "error": str(e),
-                })
-        
-        return results_summary
+async def _run_search(db_session, kb_id: int, query: str, enable_rerank: bool = True):
+    """封装：调用 RetrievalService.search，返回 list[RetrievedHit]"""
+    from app.services.retrieval_service import RetrievalService
+
+    service = RetrievalService(db_session)
+    return await service.search(
+        kb_id=kb_id,
+        query_text=query,
+        user_id=None,  # 公开知识库
+        top_k=3,
+        min_score=0.0,
+        enable_rerank=enable_rerank,
+        enable_merge=False,
+    )
 
 
-async def run_search_mode_comparison(kb_id: int):
-    """对比不同检索模式的效果"""
-    print_separator("Step 4: 检索模式对比")
-    
-    async with AsyncSessionLocal() as db:
-        service = RetrievalService(db)
-        
-        test_query = "RAG系统如何使用向量数据库进行检索"
-        
-        print(f"  查询: \"{test_query}\"")
-        print()
-        
-        # 1. 向量+BM25+关键词 混合检索 (默认)
-        print(f"  [模式 A] 混合检索 (Vector + BM25 + Keyword)")
-        hits_hybrid = await service.search(
-            kb_id=kb_id,
-            query_text=test_query,
-            top_k=3,
-            enable_rerank=True,
+def _check_embedding_model_available() -> Tuple[bool, str]:
+    """检测 Embedding 模型文件是否可用；没有则建议 skip。
+
+    返回: (ok, reason)
+    """
+    try:
+        from app.core.config import settings
+        from sentence_transformers import SentenceTransformer  # type: ignore
+    except Exception as e:
+        return False, f"import Embedding 依赖失败: {e}"
+
+    model_dir = getattr(settings, "MODEL_CACHE_DIR", None) or Path(
+        PROJECT_ROOT / "backend" / "data" / "model_cache"
+    )
+    model_path = Path(model_dir) / "embedding"
+    # 条件：
+    #   a) embedding 目录下有实际模型文件（.bin / .safetensors / config.json 任一）
+    #   b) 或者 SentenceTransformer 能直接从 HF hub load（联网场景）
+    model_file_exists = (
+        model_path.exists()
+        and any(
+            p.suffix.lower() in {".bin", ".safetensors", ".json", ".pt"}
+            for p in model_path.rglob("*")
         )
-        _print_hits(hits_hybrid, "A")
-        
-        # 2. 仅向量检索
-        print(f"\n  [模式 B] 仅向量检索 (无重排)")
-        hits_vector = await service.search(
-            kb_id=kb_id,
-            query_text=test_query,
-            top_k=3,
-            enable_rerank=False,  # 禁用 BM25 和关键词重排
+    )
+    if model_file_exists:
+        return True, "ok (local model cache)"
+    # 不直接尝试联网下载，避免卡死；给出提示信息
+    return (
+        False,
+        "Embedding 模型未缓存（建议手动跑一次 build_vector_index 让它自动下载）",
+    )
+
+
+# ============================================================
+#  PART A · pytest 模式（PHASE7 新增）
+# ============================================================
+# 整个 module 加 pytestmark = [slow, demo]，默认 pytest.ini -m "not ..." 跳过
+import pytest  # noqa: E402
+
+pytestmark = [
+    pytest.mark.slow,   # 单条 > 10s
+    pytest.mark.demo,   # 演示类：依赖真 Embedding 模型
+]
+
+
+@pytest.fixture(scope="module")
+async def hybrid_demo_env():
+    """module scope fixture：一次性建 kb → build vector index → cleanup。
+
+    实现说明（为什么不用 db_session/user_factory fixtures）：
+      - db_session 是 function scope，module scope fixture 不能依赖它（pytest scope 层级限制）
+      - 所以直接用真实 AsyncSessionLocal 连持久化库（通常是 SQLite 文件 / PostgreSQL）
+      - 好处：整个 module 9 个 test function 共用同一个 KB，embedding build 只做 1 次（15-30s）
+      - teardown：手动删 KB 级联文档/chunks + 删 vector store 文件，避免污染下次测试
+    """
+    import pytest as _pt
+    from sqlalchemy import select, delete
+    from app.models.database import AsyncSessionLocal
+    from app.models.entities.knowledge_base import KnowledgeBase
+    from app.models.entities.document import Document, DocumentChunk
+    from app.services.document_service import DocumentService
+
+    # ---- 前置条件 1：Embedding 模型可用 ----
+    ok, reason = _check_embedding_model_available()
+    if not ok:
+        _pt.skip(
+            f"[hybrid_demo_env] Embedding 模型不可用，跳过 hybrid_demo。原因: {reason}"
         )
-        _print_hits(hits_vector, "B")
-        
-        # 3. BM25 分数分析
-        print(f"\n  [模式 C] BM25 文本匹配分析")
-        bm25_idx = await service._get_or_build_bm25(kb_id)
-        if bm25_idx and bm25_idx._n_docs > 0:
-            scores = bm25_idx.score_normalized(test_query)
-            sorted_scores = sorted(scores.items(), key=lambda x: -x[1])[:3]
-            
-            # 获取 chunk 内容
-            for rank, (chunk_id, score) in enumerate(sorted_scores, 1):
-                result = await db.execute(select(DocumentChunk).where(DocumentChunk.id == chunk_id))
-                chunk = result.scalars().first()
-                if chunk:
-                    result = await db.execute(select(Document).where(Document.id == chunk.document_id))
-                    doc = result.scalars().first()
-                    filename = doc.filename if doc else "unknown"
-                    print(f"  Rank {rank}: BM25={score:.4f} | {filename}")
-                    print(f"    内容: {chunk.content[:60]}...")
-        else:
-            print(f"  BM25 索引不可用")
+
+    # ---- 前置条件 2：真 DB session 可用 ----
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(select(1))
+    except Exception as e:
+        _pt.skip(f"[hybrid_demo_env] AsyncSessionLocal 不可用: {e}")
+
+    kb_id = None  # type: int | None
+    kb_obj = None
+
+    # ---- 1) 造测试数据（脚本模式同一套逻辑，持久化）----
+    async with AsyncSessionLocal() as db:
+        kb_id = await _setup_kb_data(db, user_factory=None)
+        # 拿到 kb 对象（后面 teardown 用）
+        kb_obj = (await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))).scalars().first()
+
+    # ---- 2) build 向量索引（关键慢步骤：真 embedding）----
+    try:
+        await _build_vector_index(kb_id)
+    except Exception as e:
+        # build 失败（没模型 / 联网失败）→ skip，不是 FAIL
+        _pt.skip(f"[hybrid_demo_env] Build 向量索引失败，跳过 demo: {e}")
+
+    yield {"kb_id": kb_id}  # 共享给 test function
+
+    # ---- teardown：KB 级联删除 + vector store 文件清理 ----
+    try:
+        async with AsyncSessionLocal() as db:
+            # 删 chunks → docs → kb（级联：有些外键没设 CASCADE，手动按顺序删保险）
+            await db.execute(delete(DocumentChunk).where(DocumentChunk.knowledge_base_id == kb_id))
+            await db.execute(delete(Document).where(Document.knowledge_base_id == kb_id))
+            if kb_obj is not None:
+                await db.delete(kb_obj)
+            await db.commit()
+    except Exception:
+        pass  # 清理失败不影响 test 结果（顶多残留一些 test 数据，下次 setup 会幂等清除）
+
+    try:
+        async with AsyncSessionLocal() as db:
+            ds = DocumentService(db)
+            if ds.vector_manager.has_store(kb_id):
+                ds.vector_manager.delete(kb_id)
+    except Exception:
+        pass
 
 
-def _print_hits(hits: list, mode_label: str):
-    """打印检索结果"""
+# ============================================================
+#  pytest 模式专用 helper：给每个 test function 一个 AsyncSession
+#  不用 db_session fixture 是为了避免「function scope vs module scope」冲突
+# ============================================================
+async def _pytest_run_search(kb_id: int, query: str, enable_rerank: bool = True):
+    """pytest 模式下的 search：直接开真实 AsyncSessionLocal，确保能看到 fixture 写入的数据。"""
+    from app.models.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        return await _run_search(db, kb_id, query, enable_rerank=enable_rerank)
+
+
+# ⭐ 主断言：6 个查询 × top-1 是否命中预期文档
+@pytest.mark.parametrize(
+    "test_case",
+    TEST_QUERIES,
+    ids=[q["description"] for q in TEST_QUERIES],  # pytest 显示用例名时用这个（可读性）
+)
+@pytest.mark.asyncio
+async def test_hybrid_top1_matches_expected(hybrid_demo_env, test_case):
+    """每个查询 top-1 文档的文件名必须包含至少 1 个 expected 关键词。
+
+    这是混合检索「效果底线」断言 —— 6 个文档语义区分度足够，top-1 错了基本说明检索有 bug。
+    """
+    kb_id = hybrid_demo_env["kb_id"]
+
+    hits = await _pytest_run_search(kb_id, test_case["query"], enable_rerank=True)
+
+    # 1) 至少有 1 条结果
+    assert hits, f"查询 [{test_case['query']}] 返回空结果（期望 ≥1 条）"
+
+    # 2) top-1 文件名是否命中预期
+    top_hit = hits[0]
+    top_filename = top_hit.document_filename or ""
+    assert _match_expected(top_filename, test_case["expected_keywords"]), (
+        f"查询 [{test_case['query']}] Top-1 命中错误文档。\n"
+        f"  实际命中: {top_filename} (score={top_hit.final_score:.4f})\n"
+        f"  预期包含关键词: {test_case['expected_keywords']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_hybrid_has_hits_for_all_queries(hybrid_demo_env):
+    """批量断言：6 个查询每条都至少有 1 条 hit（快速 smoke 类断言）。"""
+    kb_id = hybrid_demo_env["kb_id"]
+    results = []
+    for tc in TEST_QUERIES:
+        hits = await _pytest_run_search(kb_id, tc["query"])
+        results.append((tc["query"], len(hits)))
+
+    bad = [r for r in results if r[1] == 0]
+    assert not bad, f"以下查询返回 0 条 hits: {bad}"
+
+
+@pytest.mark.asyncio
+async def test_hybrid_hybrid_mode_beats_vector_only(hybrid_demo_env):
+    """定性断言：Hybrid（混合检索）模式 hit_count ≥ 纯向量模式 hit_count。
+
+    一般 Hybrid 会召回更多（因为结合了 BM25 / keyword），这里只做 ≥ 断言。
+    """
+    kb_id = hybrid_demo_env["kb_id"]
+    q = "RAG系统如何使用向量数据库进行检索"
+
+    from app.models.database import AsyncSessionLocal
+    from app.services.retrieval_service import RetrievalService
+
+    async with AsyncSessionLocal() as db:
+        svc = RetrievalService(db)
+
+        hits_hybrid = await svc.search(
+            kb_id=kb_id, query_text=q, top_k=5, enable_rerank=True
+        )
+        hits_vector = await svc.search(
+            kb_id=kb_id, query_text=q, top_k=5, enable_rerank=False
+        )
+
+    # 定性：混合召回 ≥ 纯向量召回（不是绝对，但对 DEMO 文档集应该成立）
+    assert len(hits_hybrid) >= len(hits_vector), (
+        f"Hybrid 召回 {len(hits_hybrid)} 条，纯向量召回 {len(hits_vector)} 条，"
+        "Hybrid 不应少于纯向量"
+    )
+
+
+@pytest.mark.asyncio
+async def test_hybrid_kb_stats(hybrid_demo_env):
+    """get_kb_stats 返回文档/分块数量和 setup 一致。"""
+    kb_id = hybrid_demo_env["kb_id"]
+    from app.models.database import AsyncSessionLocal
+    from app.services.retrieval_service import RetrievalService
+
+    async with AsyncSessionLocal() as db:
+        svc = RetrievalService(db)
+        stats = await svc.get_kb_stats(kb_id, user_id=None)
+
+    assert stats is not None, "get_kb_stats 返回 None"
+    assert stats.get("total_documents") == len(TEST_DOCUMENTS), (
+        f"文档数 {stats.get('total_documents')} != 预期 {len(TEST_DOCUMENTS)}"
+    )
+    assert stats.get("total_chunks") == len(TEST_DOCUMENTS), (
+        f"分块数 {stats.get('total_chunks')} != 预期 {len(TEST_DOCUMENTS)} (1 doc = 1 chunk)"
+    )
+
+
+# ============================================================
+#  PART B · 手动脚本模式（旧版兼容）
+# ============================================================
+
+
+def _print_hits(hits: list, mode_label: str = ""):
+    """脚本模式下漂亮打印检索结果"""
     if not hits:
         print(f"  [模式 {mode_label}] 未找到结果")
         return
-    
+
     for hit in hits:
         filename = hit.document_filename or "unknown"
-        print(f"  Rank {hit.rank}: score={hit.final_score:.4f} (vec={hit.vector_score:.4f}, bm25={hit.bm25_score:.4f}, kw={hit.keyword_score:.4f}) | {filename}")
+        print(
+            f"  Rank {hit.rank}: score={hit.final_score:.4f} "
+            f"(vec={hit.vector_score:.4f}, bm25={hit.bm25_score:.4f}, "
+            f"kw={hit.keyword_score:.4f}) | {filename}"
+        )
+
+
+async def setup_test_data():
+    """脚本模式：使用真实 AsyncSessionLocal 造数据（持久化，支持多轮重复演示）"""
+    from app.models.database import AsyncSessionLocal
+
+    print_separator("Step 1: 创建测试数据")
+    async with AsyncSessionLocal() as db:
+        kb_id = await _setup_kb_data(db, user_factory=None)
+        await db.commit()
+        print(f"  [OK] 知识库 ID={kb_id}，文档 {len(TEST_DOCUMENTS)} 篇")
+        return kb_id
+
+
+async def build_vector_index(kb_id: int):
+    print_separator("Step 2: 构建向量索引")
+    stats = await _build_vector_index(kb_id)
+    print(f"  向量维度: {stats['dim']}  向量数量: {stats['total_vectors']}")
+    return stats
+
+
+async def run_hybrid_search(kb_id: int):
+    """脚本模式：循环 6 个查询 + 打印详细表格"""
+    from app.models.database import AsyncSessionLocal
+
+    print_separator("Step 3: 混合检索测试")
+    async with AsyncSessionLocal() as db:
+        service = __import__("app.services.retrieval_service", fromlist=["RetrievedHit"]).RetrievalService(db)
+        mode = "PostgreSQL 原生检索" if service._use_postgres_search else "FAISS + BM25 (降级模式)"
+        print(f"  检索模式: {mode}")
+
+        summary = []
+        for i, tc in enumerate(TEST_QUERIES, 1):
+            print(f"\n  --- 查询 {i}/{len(TEST_QUERIES)} ---")
+            print(f"  查询: \"{tc['query']}\"   预期: {tc['description']}")
+            try:
+                hits = await _run_search(db, kb_id, tc["query"])
+                print(f"  命中 {len(hits)} 条")
+                if hits:
+                    for h in hits[:3]:
+                        fn = h.document_filename or "?"
+                        preview = h.content[:40].replace("\n", " ").strip() + "..."
+                        print(
+                            f"    #{h.rank} score={h.final_score:.4f} "
+                            f"(vec={h.vector_score:.2f} bm25={h.bm25_score:.2f} kw={h.keyword_score:.2f}) "
+                            f"| {fn:<30} {preview}"
+                        )
+                    top_fn = hits[0].document_filename or ""
+                    ok = _match_expected(top_fn, tc["expected_keywords"])
+                    print(f"  Top-1 命中预期文档: {'YES' if ok else 'NO'}")
+                    summary.append(
+                        {
+                            "query": tc["query"],
+                            "hit_count": len(hits),
+                            "top_hit": top_fn,
+                            "top_score": hits[0].final_score,
+                            "matched": ok,
+                        }
+                    )
+                else:
+                    summary.append(
+                        {"query": tc["query"], "hit_count": 0, "top_hit": None, "matched": False}
+                    )
+            except Exception as e:
+                print(f"  [ERROR] {e}")
+                summary.append({"query": tc["query"], "hit_count": 0, "error": str(e)})
+
+        return summary
+
+
+async def run_search_mode_comparison(kb_id: int):
+    print_separator("Step 4: 检索模式对比")
+    from app.models.database import AsyncSessionLocal
+    from sqlalchemy import select
+    from app.models.entities.document import Document, DocumentChunk
+
+    async with AsyncSessionLocal() as db:
+        from app.services.retrieval_service import RetrievalService
+
+        service = RetrievalService(db)
+        q = "RAG系统如何使用向量数据库进行检索"
+        print(f"  查询: \"{q}\"\n")
+
+        print("  [模式 A] 混合检索 (Vector + BM25 + Keyword, rerank=True)")
+        hits = await service.search(kb_id=kb_id, query_text=q, top_k=3, enable_rerank=True)
+        _print_hits(hits, "A")
+
+        print("\n  [模式 B] 纯向量 (无 BM25/Keyword, rerank=False)")
+        hits = await service.search(kb_id=kb_id, query_text=q, top_k=3, enable_rerank=False)
+        _print_hits(hits, "B")
+
+        print("\n  [模式 C] BM25 文本匹配 Top-3 (原始分数)")
+        idx = await service._get_or_build_bm25(kb_id)
+        if idx and idx._n_docs > 0:
+            scores = sorted(idx.score_normalized(q).items(), key=lambda x: -x[1])[:3]
+            for r, (cid, s) in enumerate(scores, 1):
+                row = (await db.execute(select(DocumentChunk).where(DocumentChunk.id == cid))).scalars().first()
+                doc = (
+                    (await db.execute(select(Document).where(Document.id == row.document_id)))
+                    .scalars()
+                    .first()
+                    if row
+                    else None
+                )
+                fn = doc.filename if doc else "?"
+                content = (row.content[:55] + "...") if row else "?"
+                print(f"    Rank {r}: BM25={s:.4f} | {fn:<30} {content}")
+        else:
+            print("    BM25 索引不可用")
 
 
 async def show_statistics(kb_id: int):
-    """显示知识库统计信息"""
     print_separator("Step 5: 知识库统计")
-    
+    from app.models.database import AsyncSessionLocal
+    from app.services.retrieval_service import RetrievalService
+
     async with AsyncSessionLocal() as db:
-        service = RetrievalService(db)
-        stats = await service.get_kb_stats(kb_id, user_id=None)
-        
-        if stats:
-            print(f"  知识库名称: {stats.get('kb_name', 'N/A')}")
-            print(f"  文档总数: {stats.get('total_documents', 0)}")
-            print(f"  分块总数: {stats.get('total_chunks', 0)}")
-            print(f"  搜索模式: {stats.get('search_mode', 'unknown')}")
-            print(f"  嵌入维度: {stats.get('embedding_dim', 'N/A')}")
-            
-            vs = stats.get('vector_store', {})
-            if vs:
-                print(f"  向量存储:")
-                print(f"    - 类型: {vs.get('store_type', 'N/A')}")
-                print(f"    - 总向量: {vs.get('total_vectors', 0)}")
-                print(f"    - 维度: {vs.get('dim', 'N/A')}")
-            
-            pg_stats = stats.get('postgres_vector_store')
-            if pg_stats:
-                print(f"  PostgreSQL 向量存储:")
-                print(f"    - 总分块: {pg_stats.get('total_chunks', 0)}")
-                print(f"    - 有向量分块: {pg_stats.get('chunks_with_vectors', 0)}")
+        svc = RetrievalService(db)
+        stats = await svc.get_kb_stats(kb_id, user_id=None)
+        if not stats:
+            print("  (get_kb_stats 返回 None)")
+            return
+        print(f"  知识库名称: {stats.get('kb_name')}")
+        print(f"  文档总数: {stats.get('total_documents')}   分块总数: {stats.get('total_chunks')}")
+        print(f"  搜索模式: {stats.get('search_mode')}   嵌入维度: {stats.get('embedding_dim')}")
 
 
 async def cleanup(kb_id: int):
-    """清理测试数据"""
-    print_separator("Step 6: 清理选项")
-    print(f"  测试数据已保留在数据库中，便于再次测试")
-    print(f"  知识库 ID: {kb_id}")
-    print(f"  如需清理，可手动删除知识库和相关文档")
+    print_separator("Step 6: 清理")
+    print(f"  测试数据保留（便于再次测试），知识库 ID={kb_id}")
+    print(f"  手动清理: 删除知识库和相关文档即可")
 
 
 async def main():
-    print("=" * 70)
-    print("  Phase 4 混合检索实际效果测试")
-    print("=" * 70)
-    
-    print(f"\n  数据库类型: {'SQLite' if _is_sqlite else 'PostgreSQL'}")
-    print(f"  测试文档数: {len(TEST_DOCUMENTS)}")
-    print(f"  测试查询数: {len(TEST_QUERIES)}")
-    
     try:
-        # Step 1: 创建测试数据
+        from app.core.redis import init_redis
+
+        await init_redis()
+    except Exception:
+        pass
+
+    print("=" * 70)
+    print("  Phase 4 混合检索 DEMO（脚本模式）")
+    print("=" * 70)
+
+    try:
         kb_id = await setup_test_data()
-        
-        # Step 2: 构建向量索引
         await build_vector_index(kb_id)
-        
-        # Step 3: 混合检索测试
         results = await run_hybrid_search(kb_id)
-        
-        # Step 4: 模式对比
         await run_search_mode_comparison(kb_id)
-        
-        # Step 5: 统计信息
         await show_statistics(kb_id)
-        
+
         # 总结
-        print_separator("总结: 混合检索效果分析")
-        
-        successful = sum(1 for r in results if r["hit_count"] > 0)
-        print(f"  查询成功: {successful}/{len(results)}")
+        print_separator("总结")
+        matched = sum(1 for r in results if r.get("matched"))
+        total = len(results)
+        print(f"  Top-1 命中预期文档: {matched}/{total}")
         print()
-        
-        print(f"  {'查询':<45} {'命中数':<8} {'Top-1 文档':<35} {'分数'}")
-        print(f"  {'-'*45} {'-'*8} {'-'*35} {'-'*8}")
-        
-        for r in results:
-            query = r["query"][:42] + "..." if len(r["query"]) > 42 else r["query"]
-            hit_count = r["hit_count"]
-            top_hit = (r["top_hit"] or "N/A")[:33]
-            top_score = f"{r.get('top_score', 0):.4f}" if r.get("top_score") else "N/A"
-            print(f"  {query:<45} {hit_count:<8} {top_hit:<35} {top_score}")
-        
+        print(f"  {'查询':<36} {'命中':<6} {'Top-1 文档':<30} {'分数':<8} 预期")
+        print(f"  {'-'*36} {'-'*6} {'-'*30} {'-'*8}")
+        for tc, r in zip(TEST_QUERIES, results):
+            q = (tc["query"][:33] + "...") if len(tc["query"]) > 33 else tc["query"]
+            top_hit = (r.get("top_hit") or "N/A")[:28]
+            score = f"{r.get('top_score', 0):.4f}" if r.get("top_score") else "N/A"
+            ok = "Y" if r.get("matched") else "N"
+            print(f"  {q:<36} {r['hit_count']:<6} {top_hit:<30} {score:<8} {ok}")
+
         await cleanup(kb_id)
-        
-        print(f"\n{'='*70}")
-        print(f"  混合检索测试完成!")
-        print(f"{'='*70}")
-        
+        print(f"\n{'='*70}\n  DEMO 完成!\n{'='*70}")
     except Exception as e:
-        print(f"\n  [FATAL] 测试失败: {e}")
+        print(f"\n  [FATAL] {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

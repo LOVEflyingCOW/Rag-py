@@ -232,6 +232,9 @@ async def init_db() -> None:
         async with async_engine.begin() as conn:
             await conn.execute(__import__("sqlalchemy").text("CREATE EXTENSION IF NOT EXISTS vector"))
 
+    # 种子数据 — 默认角色 + 权限（兼容 PG/SQLite，已存在则跳过）
+    await _seed_rbac()
+
     logger.info("Database initialized successfully")
 
 
@@ -243,4 +246,162 @@ def init_db_sync() -> None:
 
     Base.metadata.create_all(bind=sync_engine)
 
+    _seed_rbac_sync()
+
     logger.info("Database initialized successfully")
+
+
+# ============================================================
+#  RBAC 种子数据（与 alembic/versions/f1a2c3d4e5f6_*.py 保持一致）
+# ============================================================
+
+_DEFAULT_ROLES = ["admin", "editor", "viewer"]
+_DEFAULT_PERMISSIONS = [
+    ("kb", "create", "创建知识库"),
+    ("kb", "read", "查看知识库"),
+    ("kb", "update", "更新知识库"),
+    ("kb", "delete", "删除知识库"),
+    ("document", "create", "上传文档"),
+    ("document", "read", "查看文档"),
+    ("document", "update", "更新文档"),
+    ("document", "delete", "删除文档"),
+    ("conversation", "create", "创建会话"),
+    ("conversation", "read", "查看会话"),
+    ("conversation", "delete", "删除会话"),
+    ("chat", "use", "使用聊天问答"),
+    ("retrieval", "use", "使用检索接口"),
+    ("user", "manage", "管理用户"),
+    ("system", "admin", "系统管理员权限"),
+]
+_ROLE_PERMISSIONS = {
+    # admin: 所有 15 个权限
+    "admin": [
+        ("kb", "create"), ("kb", "read"), ("kb", "update"), ("kb", "delete"),
+        ("document", "create"), ("document", "read"), ("document", "update"), ("document", "delete"),
+        ("conversation", "create"), ("conversation", "read"), ("conversation", "delete"),
+        ("chat", "use"), ("retrieval", "use"),
+        ("user", "manage"), ("system", "admin"),
+    ],
+    # editor: 除 user.manage / system.admin 外的业务权限
+    # 设计意图：RBAC 控制"是否允许访问该端点"，Service 层所有权再限制操作对象
+    "editor": [
+        ("kb", "create"), ("kb", "read"), ("kb", "update"), ("kb", "delete"),
+        ("document", "create"), ("document", "read"), ("document", "update"), ("document", "delete"),
+        ("conversation", "create"), ("conversation", "read"), ("conversation", "delete"),
+        ("chat", "use"), ("retrieval", "use"),
+    ],
+    # viewer: 只读 + 问答/检索
+    "viewer": [
+        ("kb", "read"),
+        ("document", "read"),
+        ("conversation", "read"),
+        ("chat", "use"), ("retrieval", "use"),
+    ],
+}
+_ROLE_DESCS = {
+    "admin": "系统管理员 — 拥有全部权限",
+    "editor": "编辑者 — 可创建/修改知识库和文档",
+    "viewer": "观察者 — 只读权限，可提问",
+}
+
+
+async def _seed_rbac() -> None:
+    """异步方式写入默认角色/权限（幂等）"""
+    from sqlalchemy import text
+    from app.models.entities import Role, Permission
+
+    async with AsyncSessionLocal() as session:
+        # 1. 角色
+        for rn in _DEFAULT_ROLES:
+            exists = (await session.execute(
+                text("SELECT 1 FROM roles WHERE name = :n"), {"n": rn}
+            )).fetchone()
+            if not exists:
+                await session.execute(
+                    text("INSERT INTO roles (name, description) VALUES (:n, :d)"),
+                    {"n": rn, "d": _ROLE_DESCS.get(rn, "")}
+                )
+        # 2. 权限
+        for (res, act, desc) in _DEFAULT_PERMISSIONS:
+            exists = (await session.execute(
+                text("SELECT 1 FROM permissions WHERE resource = :r AND action = :a"),
+                {"r": res, "a": act}
+            )).fetchone()
+            if not exists:
+                await session.execute(
+                    text("INSERT INTO permissions (resource, action, description) VALUES (:r, :a, :d)"),
+                    {"r": res, "a": act, "d": desc}
+                )
+        await session.commit()
+
+        # 3. role_permissions 关联
+        for rn, perms in _ROLE_PERMISSIONS.items():
+            role_row = (await session.execute(
+                text("SELECT id FROM roles WHERE name = :n"), {"n": rn}
+            )).fetchone()
+            if not role_row:
+                continue
+            rid = role_row[0]
+            for (res, act) in perms:
+                perm_row = (await session.execute(
+                    text("SELECT id FROM permissions WHERE resource = :r AND action = :a"),
+                    {"r": res, "a": act}
+                )).fetchone()
+                if not perm_row:
+                    continue
+                pid = perm_row[0]
+                exists = (await session.execute(
+                    text("SELECT 1 FROM role_permissions WHERE role_id = :rid AND permission_id = :pid"),
+                    {"rid": rid, "pid": pid}
+                )).fetchone()
+                if not exists:
+                    await session.execute(
+                        text("INSERT INTO role_permissions (role_id, permission_id) VALUES (:rid, :pid)"),
+                        {"rid": rid, "pid": pid}
+                    )
+        await session.commit()
+
+
+def _seed_rbac_sync() -> None:
+    """同步方式写入默认角色/权限（Celery Worker 等场景）"""
+    from sqlalchemy import text
+
+    with SessionLocal() as session:
+        for rn in _DEFAULT_ROLES:
+            if not session.execute(text("SELECT 1 FROM roles WHERE name = :n"), {"n": rn}).fetchone():
+                session.execute(
+                    text("INSERT INTO roles (name, description) VALUES (:n, :d)"),
+                    {"n": rn, "d": _ROLE_DESCS.get(rn, "")}
+                )
+        for (res, act, desc) in _DEFAULT_PERMISSIONS:
+            if not session.execute(
+                text("SELECT 1 FROM permissions WHERE resource = :r AND action = :a"),
+                {"r": res, "a": act}
+            ).fetchone():
+                session.execute(
+                    text("INSERT INTO permissions (resource, action, description) VALUES (:r, :a, :d)"),
+                    {"r": res, "a": act, "d": desc}
+                )
+        session.commit()
+        for rn, perms in _ROLE_PERMISSIONS.items():
+            role_row = session.execute(text("SELECT id FROM roles WHERE name = :n"), {"n": rn}).fetchone()
+            if not role_row:
+                continue
+            rid = role_row[0]
+            for (res, act) in perms:
+                perm_row = session.execute(
+                    text("SELECT id FROM permissions WHERE resource = :r AND action = :a"),
+                    {"r": res, "a": act}
+                ).fetchone()
+                if not perm_row:
+                    continue
+                pid = perm_row[0]
+                if not session.execute(
+                    text("SELECT 1 FROM role_permissions WHERE role_id = :rid AND permission_id = :pid"),
+                    {"rid": rid, "pid": pid}
+                ).fetchone():
+                    session.execute(
+                        text("INSERT INTO role_permissions (role_id, permission_id) VALUES (:rid, :pid)"),
+                        {"rid": rid, "pid": pid}
+                    )
+        session.commit()

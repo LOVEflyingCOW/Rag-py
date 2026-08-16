@@ -18,6 +18,14 @@ tox/
 nox/
 coverage
 pytest_cache/
+htmlcov/
+reports/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.mypy_cache/
+.ruff_cache/
 # Jupyter Notebook 检查点
 ipynb_checkpoints/
 # IDE 配置文件

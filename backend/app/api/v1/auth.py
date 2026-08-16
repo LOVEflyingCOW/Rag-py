@@ -76,10 +76,59 @@ async def _is_refresh_token_valid(db: AsyncSession, token: str) -> bool:
 
 
 def _get_user_roles(user: User) -> list:
-    """获取用户角色名列表"""
+    """获取用户角色名列表（优先从 user.roles ORM 关联读，缺省时按 is_admin 回退）"""
+    # 1. 尝试从 User.roles 关系读（需要 lazy="selectin" 已加载；若未加载则走 db 查询）
+    try:
+        roles_rel = getattr(user, "roles", None)
+        if roles_rel is not None and hasattr(roles_rel, "__iter__"):
+            role_names = []
+            for r in roles_rel:
+                # role 对象可能是 ORM Role 或已被 SQLA 物化过
+                rn = getattr(r, "name", None)
+                if rn:
+                    role_names.append(rn)
+            if role_names:
+                # is_admin=True 时保证有 admin 角色兜底
+                if user.is_admin and "admin" not in role_names:
+                    role_names.append("admin")
+                return role_names
+    except Exception:
+        pass
+
+    # 2. 回退：按 is_admin 布尔值 + 默认 viewer/editor
     if user.is_admin:
         return ["admin"]
-    return ["viewer"]
+    return ["editor"]
+
+
+async def _assign_default_role(db: AsyncSession, user: User, role_name: str = "editor") -> None:
+    """为新注册用户分配默认角色（写入 user_roles 关联表）
+
+    幂等：如果用户已拥有任意角色，则跳过。
+    """
+    from sqlalchemy import text
+
+    # 先查是否已有任何角色
+    has = (await db.execute(
+        text("SELECT 1 FROM user_roles WHERE user_id = :uid LIMIT 1"),
+        {"uid": user.id}
+    )).fetchone()
+    if has:
+        return
+
+    # 获取 role_id
+    role_row = (await db.execute(
+        text("SELECT id FROM roles WHERE name = :n LIMIT 1"),
+        {"n": role_name}
+    )).fetchone()
+    if not role_row:
+        return
+    rid = role_row[0] if isinstance(role_row, (list, tuple)) else role_row.id
+    await db.execute(
+        text("INSERT INTO user_roles (user_id, role_id) VALUES (:uid, :rid)"),
+        {"uid": user.id, "rid": rid}
+    )
+    await db.commit()
 
 
 # ============================================================
@@ -116,6 +165,10 @@ async def register(payload: UserRegister, request: Request, db: AsyncSession = D
     )
     db.add(user)
     await db.commit()
+    await db.refresh(user)
+
+    # 新用户自动分配 editor 默认角色（已存在时幂等跳过）
+    await _assign_default_role(db, user, "editor")
     await db.refresh(user)
 
     roles = _get_user_roles(user)

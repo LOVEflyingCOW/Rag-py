@@ -340,11 +340,22 @@ $TOOL_LIST
         action = ""
         action_input = ""
 
-        # 匹配 "Thought: ..." / "Action: ..." / "Action Input: ..."
+        # 匹配双语前缀: Thought/思考 · Action/动作 · Action Input/动作输入 · Observation/观察 · Final Answer/最终回答
+        # 兼容 ASCII 冒号 : 和中文全角冒号 ：，兼容大小写 (?i)
+        # ⚠️ 关键词分组用 (?:...) 非捕获：保证 group(1) 依然是「内容本身」，不破坏下方 m.group(1) 代码
         patterns = [
-            (r"(?i)Thought\s*[:：]\s*(.*?)(?=(?:Action\s*[:：]|Observation\s*[:：]|Final Answer|$))", "thought"),
-            (r"(?i)Action\s*[:：]\s*(.*?)(?=(?:Action Input\s*[:：]|Observation\s*[:：]|Thought\s*[:：]|$))", "action"),
-            (r"(?i)Action Input\s*[:：]\s*(.*?)(?=(?:Observation\s*[:：]|Thought\s*[:：]|Action\s*[:：]|$))", "input"),
+            (
+                r"(?i)(?:Thought|思考)\s*[:：]\s*(.*?)(?=(?:Action\s*[:：]|动作\s*[:：]|Observation\s*[:：]|观察\s*[:：]|Final Answer|最终回答|$))",
+                "thought",
+            ),
+            (
+                r"(?i)(?:Action|动作)\s*[:：]\s*(.*?)(?=(?:Action Input\s*[:：]|动作输入\s*[:：]|Observation\s*[:：]|观察\s*[:：]|Thought\s*[:：]|思考\s*[:：]|$))",
+                "action",
+            ),
+            (
+                r"(?i)(?:Action Input|动作输入)\s*[:：]\s*(.*?)(?=(?:Observation\s*[:：]|观察\s*[:：]|Thought\s*[:：]|思考\s*[:：]|Action\s*[:：]|动作\s*[:：]|$))",
+                "input",
+            ),
         ]
 
         for pat, key in patterns:
@@ -360,9 +371,11 @@ $TOOL_LIST
                     action_input = val
 
         # 如果完全没匹配到 Action，但文本很短 → 视为直接 answer
-        if not action and len(text) < 500 and "Final" not in text and "Action" not in text:
-            action = "Final Answer"
-            action_input = text.strip()
+        if not action and len(text) < 500:
+            contains_react_keyword = any(k in text for k in ("Final", "Action", "最终回答", "动作"))
+            if not contains_react_keyword:
+                action = "Final Answer"
+                action_input = text.strip()
 
         return thought, action, action_input
 

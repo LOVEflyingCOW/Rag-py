@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, ConfigDict
+# Pydantic v1/v2 兼容: 项目固定 Pydantic v1.10+
+from pydantic import BaseModel, Field
+try:
+    from pydantic import ConfigDict  # v2+
+except ImportError:  # pragma: no cover - v1 fallback
+    def ConfigDict(**kwargs):  # type: ignore
+        return kwargs
 
 __all__ = [
     "DocumentInfo",
@@ -36,6 +42,9 @@ class DocumentInfo(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    class Config:
+        orm_mode = True
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -54,6 +63,9 @@ class ChunkInfo(BaseModel):
     content: str
     chunk_index: int
     vector_index: int = -1
+
+    class Config:
+        orm_mode = True
 
     model_config = ConfigDict(from_attributes=True)
 

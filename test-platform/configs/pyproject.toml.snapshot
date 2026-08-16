@@ -1,0 +1,181 @@
+# ======================================================================
+#  RAG-PY Backend 统一配置 — pyproject.toml (Phase 6 新增)
+# ======================================================================
+# 为什么集中在这里?
+#   1) pytest / ruff / mypy / coverage 等现代工具都优先从 pyproject.toml 读配置
+#   2) setup.cfg / tox.ini / .flake8 可以全部废弃, 保持根目录清爽
+#   3) GitHub Actions CI 可以 `ruff check .`、`mypy app`、`pytest` 直接调用
+#
+# 踩坑 & 注意:
+#   - Py3.7 项目必须显式 target-version = "py37", 否则 ruff 会建议用 match-case / dict | dict
+#     等 Py3.10+ 语法, 导致「本地通过, CI 报错」
+#   - mypy 的 ignore_missing_imports = True 是为了:
+#       a) typing_extensions 部分新特性没 stub  b) 外部包没装 .pyi
+#     如果未来想做严格类型检查可以改成部分忽略 ([[tool.mypy.overrides]] 按模块开关)
+#   - pytest.ini 仍然保留用于 addopts (--cov / --junitxml) 因为 pytest-cov 从 5.x 开始
+#     对 pyproject.toml 的 [tool.pytest.ini_options] 支持和 pytest.ini 的合并顺序有坑,
+#     保守起见我们把报告参数放在 pytest.ini 而把环境变量/collect 行为放在这里
+# ======================================================================
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rag-py-backend"
+version = "0.6.0"
+description = "RAG Knowledge Base Backend (FastAPI + PostgreSQL pgvector + Celery)"
+requires-python = ">=3.7,<4.0"
+readme = "README.md"  # 可选, 缺失时 setuptools 不报错
+dependencies = []  # 依赖统一写在 backend/requirements.txt
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+include = ["app*", "alembic*"]
+exclude = ["tests*", "docs*", "venv*"]
+
+
+# ============================================================
+#  ruff (lint + format, 替代 flake8 + isort + black)
+# ============================================================
+[tool.ruff]
+target-version = "py37"
+line-length = 120
+src = ["backend/app", "backend/tests", "backend/alembic"]
+
+[tool.ruff.lint]
+# R: 重构建议   E/W: pycodestyle 风格  F: pyflakes 导入/未使用
+# I: isort 排序  UP: pyupgrade 语法升级  B: flake8-bugbear 潜在 bug
+# SIM: 简化表达式  PERF: 性能  PTH: pathlib 替代 os.path
+select = ["E", "W", "F", "I", "R", "UP", "B", "SIM", "PERF"]
+ignore = [
+    "E501",   # line-length 交给 formatter 处理 (lint 里跳过, 避免重复)
+    "B008",   # do not perform function calls in argument defaults — FastAPI 大量用 Depends(X())
+    "UP006",  # 用 list/dict 代替 List/Dict — 项目保留 Pydantic v1 下的 typing.List 用法
+    "UP007",  # 同上 Optional[X] / Union[A,B]
+    "UP035",  # typing_extensions.import 提醒 — 我们是为了 Py3.7 兼容
+    "PERF203",# try/except 放在循环里的提醒 — Celery/asyncio 里常规做法
+]
+# 排除的目录/文件
+exclude = [
+    ".git",
+    "venv",
+    "env",
+    "build",
+    "dist",
+    "htmlcov",
+    "reports",
+    "backend/alembic/versions",  # 迁移脚本是自动生成的, lint 不严格
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试脚本允许 assert / print / 未使用变量
+"backend/tests/**/*.py" = ["S101", "T201", "F841"]
+# __init__ 里允许未使用 import (re-export 常用)
+"backend/app/**/__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests", "alembic"]
+known-local-folder = ["backend"]
+force-single-line = false
+lines-after-imports = 2
+lines-between-types = 1
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+indent-width = 4
+line-ending = "lf"
+skip-magic-trailing-comma = false
+
+
+# ============================================================
+#  mypy (静态类型检查)
+# ======================================================================
+[tool.mypy]
+python_version = "3.7"
+warn_return_any = true
+warn_unused_ignores = false
+ignore_missing_imports = true
+no_implicit_optional = true
+strict_equality = true
+show_column_numbers = true
+show_error_codes = true
+pretty = true
+
+# 检查哪些目录 (tests 不强求, 按需放宽)
+mypy_path = ["backend"]
+files = "backend/app"
+
+# 增量检查缓存 (避免 mypy 每次全量)
+cache_dir = ".mypy_cache"
+
+[[tool.mypy.overrides]]
+module = [
+    "app.models.entities.*",
+    "app.models.database",
+    "app.core.celery_app",
+]
+# ORM + Celery 动态属性太多, 跳过严格检查
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+ignore_errors = true
+
+
+# ============================================================
+#  pytest (覆盖率)
+# ======================================================================
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/alembic/*",
+    "*/venv/*",
+    "*/env/*",
+    "*/site-packages/*",
+    # main.py 里的 start lifespan 里 import 很重, 覆盖率不重要
+    "app/main.py",
+    # core/middleware 是胶水代码
+    "app/core/middleware/*",
+    # Celery tasks 由 worker 跑, pytest 不触发, 跳过
+    "app/processors/celery_tasks/*",
+]
+
+[tool.coverage.report]
+# 报告最低及格线: unit+integration 整体 > 55%, 核心模块 > 70%
+fail_under = 55
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "reports/coverage.xml"
+
+
+# ============================================================
+#  pytest (ini_options 层, 只放 collect 相关)
+# ======================================================================
+[tool.pytest.ini_options]
+# testpaths 仅在 pytest 不带路径参数时生效, 我们仍默认跑 tests/
+# addopts 仍然写在 pytest.ini, 理由见前文
+testpaths = ["tests"]
+markers = [
+    "unit: 单元测试 — 纯逻辑, 无外部依赖",
+    "integration: 集成测试 — 跨模块, 需要 DB/SQLite 内存",
+    "api: API 契约测试 — 通过 httpx.AsyncClient 发请求",
+    "load: 负载测试 — 并发/压测, 通常本地跑, CI 默认跳过",
+    "slow: 标记为慢的用例, 可用 -m \"not slow\" 跳过",
+    "phase: 冒烟回归 (Phase 1~5 的独立脚本, 通常手动运行)",
+]

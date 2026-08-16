@@ -11,7 +11,13 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status,
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_db_dep, get_current_user, get_current_user_optional, CurrentUser
+from app.api.dependencies import (
+    get_db_dep,
+    get_current_user,
+    get_current_user_optional,
+    CurrentUser,
+    require_permission,
+)
 from app.models.response import ApiResponse
 from app.models.schemas import DocumentInfo, DocumentListResponse, DocumentUploadResponse, ChunkInfo, SearchResponse
 from app.services.document_service import DocumentService
@@ -28,7 +34,7 @@ async def upload_document(
     file: UploadFile = File(..., description="要上传的文件 (.txt, .md, .pdf, .doc, .docx 等)"),
     chunk_size: Optional[int] = Form(None, ge=100, le=2000, description="分块大小（字符），默认使用知识库配置"),
     chunk_overlap: Optional[int] = Form(None, ge=0, le=500, description="分块重叠（字符），默认使用知识库配置"),
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_permission("document", "create")),
     db: AsyncSession = Depends(get_db_dep),
 ):
     """上传文档到知识库（仅知识库所有者）
@@ -313,10 +319,10 @@ async def get_document_chunks(
 async def delete_document(
     kb_id: int,
     doc_id: int,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_permission("document", "delete")),
     db: AsyncSession = Depends(get_db_dep),
 ):
-    """删除文档（仅知识库所有者）"""
+    """删除文档（需要 document:delete 权限；仅限所有者 — Service 层再校验）"""
     service = DocumentService(db)
     success = await service.delete_document(doc_id, user_id=current_user.user_id)
     if not success:

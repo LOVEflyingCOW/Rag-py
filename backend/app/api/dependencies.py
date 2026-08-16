@@ -141,3 +141,93 @@ async def get_current_admin(
             detail="需要管理员权限",
         )
     return current_user
+
+
+# ============================================================
+#  RBAC 细粒度权限依赖 (Require Permission)
+# ============================================================
+# 设计原则:
+# 1. Admin 无条件通过
+# 2. 用户显式拥有 resource:action 权限 → 通过
+# 3. 用户在 user_roles 表中没有任何角色行 (Legacy 用户) → 通过,
+#    继续走 Service 层所有权检查 (向后兼容历史数据)
+# 4. 有角色但缺少对应权限 → 403
+# 注意: 第 3 点仅在注册流程尚未走默认角色分配时触发；新用户注册时
+#       会由 _assign_default_role() 自动分配 editor 角色。
+# ============================================================
+
+def require_permission(resource: str, action: str):
+    """细粒度权限校验工厂。使用方法:
+
+        @router.post("")
+        async def create_kb(
+            user: CurrentUser = Depends(require_permission("kb", "create")),
+            ...
+        ):
+            ...
+    """
+    async def checker(
+        current_user: CurrentUser = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db_dep),
+    ) -> CurrentUser:
+        # 1. Admin 兜底 (JWT 角色判定)
+        if current_user.is_admin:
+            return current_user
+
+        # 2. Legacy 用户 (user_roles 中无任何记录) — 向后兼容
+        from sqlalchemy import text
+        has_any_role = (await db.execute(
+            text("SELECT 1 FROM user_roles WHERE user_id = :uid LIMIT 1"),
+            {"uid": current_user.user_id}
+        )).fetchone()
+        if not has_any_role:
+            # 没有角色分配的老用户：交由 Service 层所有权校验
+            return current_user
+
+        # 3. 显式权限检查 (通过 roles → role_permissions → permissions)
+        role_names = [r for r in (current_user.roles or [])]
+        if role_names:
+            placeholders = ",".join([f":r{i}" for i in range(len(role_names))])
+            params = {f"r{i}": rn for i, rn in enumerate(role_names)}
+            params["res"] = resource
+            params["act"] = action
+            sql = (
+                "SELECT 1 FROM permissions p "
+                "JOIN role_permissions rp ON rp.permission_id = p.id "
+                "JOIN roles r ON r.id = rp.role_id "
+                f"WHERE r.name IN ({placeholders}) "
+                "  AND p.resource = :res AND p.action = :act LIMIT 1"
+            )
+            has = (await db.execute(text(sql), params)).fetchone()
+            if has:
+                return current_user
+
+        # 4. 不满足 — 403
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="缺少 %s:%s 权限，请联系管理员" % (resource, action),
+        )
+
+    return checker
+
+
+def require_any_role(*roles: str):
+    """要求用户拥有任一指定角色。
+
+    例: require_any_role("admin", "editor") → 管理员或编辑者可访问
+    """
+    async def checker(
+        current_user: CurrentUser = Depends(get_current_user),
+    ) -> CurrentUser:
+        if current_user.is_admin and "admin" in roles:
+            return current_user
+        user_roles_set = set(current_user.roles or [])
+        for r in roles:
+            if r in user_roles_set:
+                return current_user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要以下角色之一: %s" % ", ".join(roles),
+        )
+
+    return checker

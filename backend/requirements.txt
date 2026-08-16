@@ -22,15 +22,28 @@ httpx>=0.24
 numpy>=1.21,<2.0
 faiss-cpu>=1.7
 
-# ===== Security (Phase 2 预留) =====
+# ===== Security (Phase 2) =====
 argon2-cffi>=23.1
 PyJWT[crypto]>=2.8
+
+# ===== RAG Quality (Phase 4) — Reranker & 多策略分块 =====
+sentence-transformers>=2.7
+rank-bm25>=0.2.2
+
+# ===== Observability (Phase 5) — 可选依赖，未安装时代码自动降级 =====
+structlog>=24.1
+prometheus-client>=0.19
+opentelemetry-api>=1.20
+opentelemetry-sdk>=1.20
+opentelemetry-exporter-otlp-proto-grpc>=1.20
 
 # ===== Utils =====
 python-dotenv>=0.20
 pydantic>=1.10,<2.0
 requests>=2.31.0
+typing_extensions>=4.4    # Py3.7 兼容: Protocol / Self / Literal 等后移特性
 
 # ===== Dev & Test =====
 pytest>=7.0
 pytest-asyncio>=0.23
+pytest-cov>=4.0

@@ -1,0 +1,30 @@
+[pytest]
+testpaths = tests
+python_files = test_*.py
+python_classes = Test*
+python_functions = test_*
+asyncio_mode = auto
+
+# ============================================================
+#  Phase 6 新增: 覆盖率 & JUnit 报告 (pytest-cov + pytest 内置)
+#  默认行为：
+#    -v                       每个用例打印 PASS/FAIL 行
+#    --strict-markers         禁止 @pytest.mark.xxx 使用未注册的 marker
+#    -ra                      最后汇总除 PASS 外的所有结果
+#    --cov app                统计 app 包的覆盖率
+#    --cov-report term-miss   终端输出中显示未覆盖到的行号
+#    --cov-report html        生成 htmlcov/index.html 可视化报告
+#    --cov-report xml         CI artifact (reports/coverage.xml)
+#    --junitxml               CI artifact (reports/test-results.xml)
+#  临时跳过覆盖率:
+#    pytest tests/phases/ --no-cov   (Phase 冒烟脚本更关注本身的 PASS/FAIL 统计)
+# ============================================================
+addopts =
+    -v
+    --strict-markers
+    -ra
+    --cov=app
+    --cov-report=term-missing:skip-covered
+    --cov-report=html
+    --cov-report=xml:reports/coverage.xml
+    --junitxml=reports/test-results.xml
